@@ -45,7 +45,14 @@ export function excelRound(n: number, digits: number, mode: 'half' | 'up' | 'dow
   let value = Number(kept);
   if (decide(first, rest)) value += 1;
 
-  const scaled = value * Math.pow(10, exp - keep + 1);
+  // Rebuild through the decimal literal rather than by multiplying by a power
+  // of ten. `716 * 10**-1` is 71.60000000000001; `Number("71.6")` is the
+  // nearest double to 71.6. The difference is one unit in the last place, but
+  // it is the difference between a General-formatted cell reading 71.6 and
+  // reading 71.60000000000001 — and a rounded number that is not the number
+  // asked for undermines the one thing ROUND is for.
+  const shift = exp - keep + 1;
+  const scaled = Number(`${value}e${shift}`);
   return neg ? -scaled : scaled;
 }
 

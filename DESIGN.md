@@ -816,12 +816,63 @@ The deeper lesson is about oracles generally: an oracle is a *second opinion*,
 not ground truth. The value came from the disagreements, and every one of them
 had to be adjudicated by hand against Excel's documented behaviour.
 
-### 12.6 ? Corpus breadth is the binding constraint
+### 12.6 ✓ The second harness: whole workbooks, not probes
 
-Unchanged from the original, and still the weakest evidence here: 399 synthetic
-probes plus four sample workbooks. The oracle is a transform of the input, so it
-can only teach us about shapes we thought to write down. Widening it with **real
-agent output** is the highest-value next step (§16).
+The probe suite has a structural limit: every probe in it was chosen by the
+person who wrote the engine, so it can only fail in ways its author already
+imagined. It also tests the *library* — one formula at a time against a shared
+grid — and never the **system**: zip reader, raw `t` attribute, shared-formula
+translation, cross-sheet binding, evaluation order.
+
+`eval/` closes both gaps with ten whole workbooks written as domain models —
+budget, DCF, LBO, three-statement, approval workflow, a 2,000-row sales ledger,
+a cohort triangle, a 360-month amortisation, an inventory plan, and one
+adversarial sheet — emitted by openpyxl with no cached values, then compared
+cell by cell against a LibreOffice recalc of the same file.
+
+The discipline that makes it evidence rather than ceremony: **the models were
+written without consulting `CAPABILITY.md`**. Writing toward the supported list
+guarantees a green run and measures nothing.
+
+```
+37,098 formula cells   coverage 100.0%   accuracy 100.0%   false confidence 0
+```
+
+Two buckets are new here. **`inherited`** — we disagree with the oracle, but our
+formula re-run against *the oracle's own inputs* reproduces the oracle's answer,
+so this cell computed correctly and the difference arrived from upstream.
+**`volatile`** — depends on `NOW`/`TODAY` and so cannot agree with an oracle
+computed at another moment; excluded, not excused.
+
+Its first run found four engine bugs and two missing functions in 139
+disagreements:
+
+| finding | cells | why it was invisible |
+|---|---|---|
+| Numeric criteria matched non-numeric cells | 57 | The `*IF` family used Excel's *general* ordering, where `"label" > 0` is genuinely TRUE, instead of Excel's type-scoped criteria comparison. Every conditional sum over a column with a header or an `""` was inflated |
+| `ROUND` reconstructed one ulp off | 67 | `716 * 10**-1` is 71.60000000000001. Individually invisible; in a debt schedule the error walked downstream until a later `ROUND` hit a half-way boundary and flipped by 0.1 |
+| `COUNTIF` did not broadcast an array criteria | 2 | Broke `SUMPRODUCT(1/COUNTIF(r,r))`, the distinct-count idiom, into a wrong number rather than an error |
+| Arithmetic overflow returned `Infinity` | 1 | `=1E+308*10` rendered as a number; Excel gives `#NUM!` |
+| `NORM.S.INV`, `FORECAST.LINEAR` missing | 1,301 refused | 186 root refusals poisoning seven cells each. Neither is exotic — both are what an *operations* model reaches for, and the library was shaped like the finance-flavoured tests written for it |
+
+The `ROUND` one is the argument for the symmetric divergence gate. That cell had
+been *declared* an unavoidable oracle-precision divergence, with a plausible
+paragraph explaining why nobody could do better. The unrelated ulp fix made it
+match; the symmetric gate failed on the now-false declaration; the explanation
+turned out to be an excuse for a real bug behind 67 cells.
+
+### 12.7 ? Corpus breadth is still the binding constraint
+
+Better than it was, and still the weakest evidence here. The ten workbooks are
+written the way an agent writes them, which is a far better sample than
+hand-picked probes — and they are still not production output. Widening with
+**real agent output** remains the highest-value next step (§16).
+
+One methodology limit worth carrying: **LibreOffice writes at most 15
+significant digits into the `.xlsx`**, where Excel writes up to 17. The oracle
+therefore cannot carry full double precision, and a model with a knife-edge can
+disagree for reasons that are nobody's bug. The `inherited` bucket exists to
+separate that class out rather than let it dilute the gate.
 
 ---
 

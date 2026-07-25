@@ -305,20 +305,23 @@ function scalarBinary(op: string, l: Scalar, r: Scalar): Scalar {
   const b = toNumber(r);
   if (isErr(b)) return b;
 
+  // Excel has no infinity: a result that overflows the double range, or is not
+  // a real number at all (`(-8)^(1/3)`), is #NUM!. Letting `Infinity` through
+  // would be worse than a wrong number, because it renders as one and no
+  // downstream check would flag it.
+  const real = (v: number): Scalar => (Number.isFinite(v) ? v : ERR.num);
+
   switch (op) {
     case '+':
-      return a + b;
+      return real(a + b);
     case '-':
-      return a - b;
+      return real(a - b);
     case '*':
-      return a * b;
+      return real(a * b);
     case '/':
-      return b === 0 ? ERR.div0 : a / b;
-    case '^': {
-      const p = Math.pow(a, b);
-      // Excel refuses results that are not real numbers, e.g. (-8)^(1/3).
-      return Number.isFinite(p) ? p : ERR.num;
-    }
+      return b === 0 ? ERR.div0 : real(a / b);
+    case '^':
+      return real(Math.pow(a, b));
     default:
       return ERR.value;
   }

@@ -1,0 +1,69 @@
+{
+  "_README": [
+    "Cells where this engine and LibreOffice disagree on purpose.",
+    "",
+    "The gate is symmetric: a declared divergence that starts *matching* fails too,",
+    "so this file cannot rot into a list of silenced failures. Each entry carries a",
+    "`confidence`, because the honest position differs case by case:",
+    "",
+    "  excel-documented  Excel's behaviour is specified or well established, and",
+    "                    this engine follows it. LibreOffice is the outlier.",
+    "  oracle-limit      Neither implementation is wrong. LibreOffice writes at",
+    "                    most 15 significant digits into the .xlsx, so the oracle",
+    "                    cannot carry the precision the comparison needs. No entry",
+    "                    currently needs this: the one candidate turned out to be a",
+    "                    real one-ulp bug in ROUND's reconstruction, which is why",
+    "                    the gate is symmetric.",
+    "  unverified        We believe we follow Excel, but nobody has run this cell",
+    "                    in Excel. Declared so the gate stays useful, and flagged",
+    "                    here so the uncertainty is visible rather than buried.",
+    "",
+    "Entries are keyed `model:Sheet!Address`."
+  ],
+
+  "m10_edge_cases:Traps!D17": {
+    "confidence": "excel-documented",
+    "why": "TRUE=1 is FALSE in Excel: a boolean and a number are different types and never compare equal. LibreOffice treats booleans as plain numbers. This is the single largest LibreOffice-vs-Excel gap in the whole corpus."
+  },
+  "m10_edge_cases:Traps!D19": {
+    "confidence": "excel-documented",
+    "why": "Excel ranks types number < text < boolean, so TRUE>\"z\" is TRUE regardless of the text. LibreOffice compares TRUE as 1 against text and gets FALSE."
+  },
+  "m10_edge_cases:Traps!D23": {
+    "confidence": "excel-documented",
+    "why": "SUM coerces numeric text passed as a *direct argument* — SUM(\"3\",1) is 4 — while ignoring it inside a range. LibreOffice returns #VALUE!. Same function, different argument kind: the distinction is deliberate in Excel and this engine implements it."
+  },
+  "m10_edge_cases:Traps!D25": {
+    "confidence": "excel-documented",
+    "why": "Excel writes a two-digit exponent, 1.23456789012346E+18. LibreOffice pads to three, E+018."
+  },
+  "m10_edge_cases:Traps!D32": {
+    "confidence": "excel-documented",
+    "why": "COUNT over a range counts numbers only; a boolean inside a range is not a number. LibreOffice counts TRUE, giving 8 where Excel gives 7. Same boolean class as D17."
+  },
+  "m10_edge_cases:Traps!D50": {
+    "confidence": "excel-documented",
+    "why": "Serial 1 is 1900-01-01 in Excel's 1900 date system. LibreOffice's own epoch renders it as 1899-12-31."
+  },
+  "m10_edge_cases:Traps!D51": {
+    "confidence": "excel-documented",
+    "why": "Serial 60 is 1900-02-29 — a day that never existed, kept for Lotus 1-2-3 compatibility and still present in Excel. LibreOffice does not reproduce the phantom leap day. That this cell disagrees is confirmation the leap-year bug is implemented, not evidence against it."
+  },
+  "m10_edge_cases:Traps!D70": {
+    "confidence": "excel-documented",
+    "why": "SQRT(-1) is #NUM! in Excel — the argument is out of the function's domain, not the wrong type. LibreOffice returns #VALUE!."
+  },
+  "m10_edge_cases:Traps!D71": {
+    "confidence": "excel-documented",
+    "why": "LOG(0) is #NUM! in Excel, for the same reason as SQRT(-1)."
+  },
+
+  "m10_edge_cases:Traps!D45": {
+    "confidence": "unverified",
+    "why": "0.1+0.2=0.3. This engine does IEEE 754 arithmetic and compares the doubles, so it is FALSE. LibreOffice rounds to 15 significant digits before comparing and gets TRUE. Which one Excel agrees with has not been checked against Excel itself: Excel is documented to carry 15 significant digits of precision, but is equally famous for =0.1+0.2-0.3 displaying 5.55E-17, and those two facts pull in opposite directions. Worth settling the next time a copy of Excel is to hand."
+  },
+  "m10_edge_cases:Traps!D92": {
+    "confidence": "unverified",
+    "why": "UPPER(\"straße\"). This engine follows the host's Unicode casing, which expands ß to SS; LibreOffice maps it to the capital ẞ (U+1E9E). Excel's behaviour has not been checked and is likely locale-dependent."
+  }
+}

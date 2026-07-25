@@ -21,16 +21,18 @@ generated financial model renders as a labelled skeleton. The previous fix was a
 server-side LibreOffice recalc, which costs the preview its two defining
 properties: no server, and nothing leaves the browser.
 
-**Status: built and verified.** 80 tests green, 399 oracle probes at 100 %
-accuracy and zero false confidence, and a real-browser check confirming that a
-file with *no* cached values renders identical numbers to the same file after a
-LibreOffice recalc.
+**Status: built and verified.** 83 tests green; 399 oracle probes and a
+**37,098-cell corpus of ten whole workbooks** both at 100 % accuracy with zero
+false confidence; and a real-browser check confirming that a file with *no*
+cached values renders identical numbers to the same file after a LibreOffice
+recalc.
 
 ```
 npm install
-npm test                       # engine + oracle
+npm test                       # engine + oracle + eval corpus
 npm run dev                    # the preview at http://localhost:5176
 python3 tools/oracle/generate.py   # rebuild oracle fixtures (needs LibreOffice)
+python3 eval/build.py              # rebuild the eval corpus (needs LibreOffice)
 node tools/verify/drive.mjs        # end-to-end check in a real browser
 ```
 
@@ -147,7 +149,34 @@ before 1900-03-01 sits one day off; `DATE(26,1,1)` is 1926 per Microsoft's
 documented rule, not 2026; `SQRT(-1)` is `#NUM!`, not `#VALUE!`.
 
 A declared divergence that starts *matching* also fails the gate — that means
-either LibreOffice changed or we drifted onto its side of the argument.
+either LibreOffice changed or we drifted onto its side of the argument. This is
+not pedantry: it is what caught the largest bug the corpus has found so far. A
+knife-edge cell had been declared an unavoidable oracle-precision divergence,
+with a plausible paragraph explaining why nobody could do better; an unrelated
+one-ulp fix in `ROUND` made it match, the symmetric gate failed on the
+now-false declaration, and the explanation turned out to be an excuse for a real
+bug affecting 67 cells.
+
+### The second harness: ten whole workbooks
+
+The probe suite answers *is this function right*. It cannot answer *does a whole
+workbook come out right*, and every probe in it was chosen by the same person
+who wrote the engine. [`eval/`](eval/README.md) is the corpus that can surprise
+its author: ten realistic models — budget, DCF, LBO, three-statement, approval
+workflow, 2,000-row sales ledger, cohort triangle, 360-month amortisation,
+inventory plan, and an adversarial sheet — written as domain models without
+consulting the capability list, then compared cell by cell against LibreOffice.
+
+```
+37,098 formula cells   coverage 100.0%   accuracy 100.0%   false confidence 0
+```
+
+Its first run, before anything was tuned, found four engine bugs and two missing
+functions. The most instructive: `COUNTIF(range,">0")` was counting text and
+empty strings, because the `*IF` family was using Excel's *general* comparison
+ordering — where `"label" > 0` really is TRUE — instead of Excel's type-scoped
+criteria comparison. Every conditional sum over a column with a header or an
+`""` in it was inflated, plausibly, invisibly.
 
 Three behaviours the oracle pinned that would otherwise have been guesses:
 General-format text switches to scientific notation at `1E16` and `1E-15`
@@ -282,9 +311,17 @@ Stated plainly rather than buried:
   default Office palette; a workbook with an embedded custom theme in
   `xl/theme/theme1.xml` will render its accent colours slightly off.
 - **In-sheet charts are not drawn.**
-- **The oracle corpus is synthetic.** 399 probes plus four sample workbooks. It
-  should be widened with real agent output before the function coverage is
-  treated as settled — the vocabulary claim is the weakest evidence here.
+- **The corpus is synthetic.** 399 probes plus ten whole workbooks
+  ([`eval/`](eval/README.md)) plus four samples. The workbooks are written the
+  way an agent writes them, which is a far better sample than hand-picked
+  probes — and still not production output. Widening it with real generated
+  models remains the highest-value next step, and the vocabulary claim is still
+  the weakest evidence here.
+- **The oracle carries only 15 significant digits.** LibreOffice writes at most
+  15 into the `.xlsx`; Excel writes up to 17. A model with a knife-edge — a
+  `ROUND` on a half-way boundary, a criterion built by concatenating a computed
+  number — can therefore disagree with the oracle for reasons that are nobody's
+  bug. The eval harness separates that class out rather than hiding it.
 
 ---
 

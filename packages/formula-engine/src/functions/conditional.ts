@@ -65,6 +65,14 @@ export function makeCriteria(crit: Scalar): Predicate {
   return (v) => {
     // Blank cells do not satisfy ordering comparisons in the *IF family.
     if (v === null) return false;
+    // Nor do values of a different type from the criterion. This is where the
+    // *IF family parts company with the `>` operator: Excel's general ordering
+    // ranks number < text < boolean, so `="text">0` really is TRUE, but
+    // `COUNTIF(range,">0")` counts only numbers. Without this line every label
+    // and every "" in a column satisfies ">0", which silently inflates
+    // conditional sums over any range that is not purely numeric — a cohort
+    // triangle, a column with a header, a lookup table with a footnote.
+    if (typeClass(v) !== typeClass(target)) return false;
     const c = compare(v, target);
     if (isErr(c)) return false;
     switch (op) {
@@ -80,32 +88,80 @@ export function makeCriteria(crit: Scalar): Predicate {
   };
 }
 
+/** Excel's criteria type classes. Ordering only compares within one of them. */
+function typeClass(v: Scalar): 'number' | 'text' | 'boolean' | 'other' {
+  if (typeof v === 'number') return 'number';
+  if (typeof v === 'string') return 'text';
+  if (typeof v === 'boolean') return 'boolean';
+  return 'other';
+}
+
+/**
+ * Run `compute` once per element of an array-valued criteria argument.
+ *
+ * `COUNTIF(A1:A5,A1:A5)` is not a typo — handed a range where it expects one
+ * criterion, Excel evaluates the function once per element and returns an
+ * array. That is the whole basis of the distinct-count idiom,
+ * `SUMPRODUCT(1/COUNTIF(range,range))`, which is common enough in real
+ * spreadsheets that collapsing the criteria to its first cell turns a correct
+ * formula into a plausible wrong number rather than an error.
+ *
+ * The all-scalar case — every criteria argument a single value — takes the
+ * fast path and allocates nothing extra, which is what a 24,000-formula sheet
+ * of ordinary SUMIFS actually does.
+ */
+function overCriteria(
+  ctx: FnContext,
+  criteria: EvalValue[],
+  compute: (crits: Scalar[]) => Scalar,
+): EvalValue {
+  const mats: Matrix[] = [];
+  for (const c of criteria) {
+    const m = asMatrix(c, ctx);
+    if (isErr(m)) return m;
+    mats.push(m);
+  }
+  const first = (m: Matrix): Scalar => (m.size === 0 ? null : m.data[0]!);
+  const shaped = mats.find((m) => m.size > 1);
+  if (!shaped) return compute(mats.map(first));
+
+  const out: Scalar[] = new Array(shaped.size);
+  for (let i = 0; i < shaped.size; i++) {
+    out[i] = compute(mats.map((m) => (m.size > 1 ? (m.data[i] ?? null) : first(m))));
+  }
+  return new Matrix(shaped.rows, shaped.cols, out);
+}
+
 export function registerConditional(): void {
   fn('COUNTIF', 2, 2, (args, ctx) => {
     const range = asMatrix(args[0]!, ctx);
     if (isErr(range)) return range;
-    const pred = makeCriteria(scalarCriteria(args[1]!, ctx));
-    let n = 0;
-    for (const v of range.values()) if (pred(v)) n++;
-    return n;
+    return overCriteria(ctx, [args[1]!], (crits) => {
+      const pred = makeCriteria(crits[0]!);
+      let n = 0;
+      for (const v of range.values()) if (pred(v)) n++;
+      return n;
+    });
   });
 
   fn('SUMIF', 2, 3, (args, ctx) => {
     const range = asMatrix(args[0]!, ctx);
     if (isErr(range)) return range;
-    const pred = makeCriteria(scalarCriteria(args[1]!, ctx));
     const target = args[2] === undefined ? range : asMatrix(args[2]!, ctx);
     if (isErr(target)) return target;
-    let total = 0;
-    for (let i = 0; i < range.size; i++) {
-      if (!pred(range.data[i]!)) continue;
-      // The sum range is addressed positionally from its top-left corner, so a
-      // shorter one is read as if it extended to match — Excel's actual behaviour.
-      const v = target.data[i];
-      if (typeof v === 'number') total += v;
-      else if (isErr(v)) return v;
-    }
-    return total;
+    return overCriteria(ctx, [args[1]!], (crits) => {
+      const pred = makeCriteria(crits[0]!);
+      let total = 0;
+      for (let i = 0; i < range.size; i++) {
+        if (!pred(range.data[i]!)) continue;
+        // The sum range is addressed positionally from its top-left corner, so a
+        // shorter one is read as if it extended to match — Excel's actual behaviour.
+        const v = target.data[i];
+        if (typeof v === 'number') total += v;
+        else if (isErr(v)) return v;
+      }
+      return total;
+    });
   });
 
   fn('AVERAGEIF', 2, 3, (args, ctx) => {
@@ -127,10 +183,12 @@ export function registerConditional(): void {
     return n === 0 ? ERR.div0 : total / n;
   });
 
-  fn('COUNTIFS', 2, -1, (args, ctx) => {
-    const hits = multiMatch(args, ctx, 0);
-    return isErr(hits) ? hits : hits.length;
-  });
+  fn('COUNTIFS', 2, -1, (args, ctx) =>
+    overCriteria(ctx, criteriaArgs(args, 0), (crits) => {
+      const hits = multiMatch(args, ctx, 0, crits);
+      return isErr(hits) ? hits : hits.length;
+    }),
+  );
 
   fn('SUMIFS', 3, -1, (args, ctx) => aggregateIfs(args, ctx, 'sum'));
   fn('AVERAGEIFS', 3, -1, (args, ctx) => aggregateIfs(args, ctx, 'average'));
@@ -148,12 +206,25 @@ function scalarCriteria(v: EvalValue, ctx: FnContext): Scalar {
  * Indices satisfying every (range, criteria) pair, starting at `from`.
  * All criteria ranges must have the same shape — Excel returns #VALUE! otherwise.
  */
-function multiMatch(args: EvalValue[], ctx: FnContext, from: number): number[] | ExcelError {
+function criteriaArgs(args: EvalValue[], from: number): EvalValue[] {
+  const out: EvalValue[] = [];
+  for (let i = from; i + 1 < args.length; i += 2) out.push(args[i + 1]!);
+  return out;
+}
+
+function multiMatch(
+  args: EvalValue[],
+  ctx: FnContext,
+  from: number,
+  crits?: Scalar[],
+): number[] | ExcelError {
   const pairs: Array<{ m: Matrix; p: Predicate }> = [];
-  for (let i = from; i + 1 < args.length; i += 2) {
+  let k = 0;
+  for (let i = from; i + 1 < args.length; i += 2, k++) {
     const m = asMatrix(args[i]!, ctx);
     if (isErr(m)) return m;
-    pairs.push({ m, p: makeCriteria(scalarCriteria(args[i + 1]!, ctx)) });
+    const crit = crits ? crits[k]! : scalarCriteria(args[i + 1]!, ctx);
+    pairs.push({ m, p: makeCriteria(crit) });
   }
   if (pairs.length === 0) return ERR.value;
   const size = pairs[0]!.m.size;

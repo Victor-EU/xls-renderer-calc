@@ -1,8 +1,8 @@
-import { textToNumber } from '../coerce.js';
+import { textToNumber, toBool } from '../coerce.js';
 import { type FnContext } from '../interpreter.js';
 import { ERR, ExcelError, isErr, type EvalValue, type Scalar } from '../values.js';
 import { fn } from './registry.js';
-import { asMatrix, collectNumbers, collectNumbersA, flatten, num, optNum, trunc } from './util.js';
+import { arg1, asMatrix, collectNumbers, collectNumbersA, flatten, num, optNum, trunc } from './util.js';
 import { excelRound } from './math.js';
 
 export function registerStats(): void {
@@ -87,7 +87,7 @@ export function registerStats(): void {
       return isErr(r) ? r : r * r;
     }),
   );
-  fn('FORECAST', 3, 3, (args, ctx) => {
+  const forecast = (args: EvalValue[], ctx: FnContext): Scalar => {
     const x = num(args, 0, ctx);
     if (isErr(x)) return x;
     return pairwise(args.slice(1), ctx, (ys, xs) => {
@@ -95,7 +95,152 @@ export function registerStats(): void {
       if (isErr(m)) return m;
       return mean(ys) + m * (x - mean(xs));
     });
+  };
+  fn('FORECAST', 3, 3, forecast);
+  // The 2016 rename. Both names ship in current Excel and a generator picks
+  // whichever its training data favoured, so refusing one is a coin flip.
+  fn('FORECAST.LINEAR', 3, 3, forecast);
+
+  // The normal distribution. Reached for by anything that sizes a buffer from a
+  // service level — safety stock, VaR, capacity planning — which is to say by
+  // every operations model, and by no finance model, which is exactly how a
+  // function library ends up shaped like its own test set.
+  fn('NORM.S.DIST', 2, 2, (args, ctx) => {
+    const z = num(args, 0, ctx);
+    if (isErr(z)) return z;
+    const cumulative = toBool(arg1(args, 1, ctx));
+    if (isErr(cumulative)) return cumulative;
+    return cumulative ? normalCdf(z) : normalPdf(z);
   });
+
+  fn('NORMSDIST', 1, 1, (args, ctx) => {
+    const z = num(args, 0, ctx);
+    return isErr(z) ? z : normalCdf(z);
+  });
+
+  fn('NORM.DIST', 4, 4, (args, ctx) => {
+    const x = num(args, 0, ctx);
+    if (isErr(x)) return x;
+    const mu = num(args, 1, ctx);
+    if (isErr(mu)) return mu;
+    const sigma = num(args, 2, ctx);
+    if (isErr(sigma)) return sigma;
+    if (sigma <= 0) return ERR.num;
+    const cumulative = toBool(arg1(args, 3, ctx));
+    if (isErr(cumulative)) return cumulative;
+    const z = (x - mu) / sigma;
+    return cumulative ? normalCdf(z) : normalPdf(z) / sigma;
+  });
+
+  const inverse = (args: EvalValue[], ctx: FnContext): Scalar => {
+    const p = num(args, 0, ctx);
+    if (isErr(p)) return p;
+    if (p <= 0 || p >= 1) return ERR.num;
+    return normalInv(p);
+  };
+  fn('NORM.S.INV', 1, 1, inverse);
+  fn('NORMSINV', 1, 1, inverse);
+
+  fn('NORM.INV', 3, 3, (args, ctx) => {
+    const p = num(args, 0, ctx);
+    if (isErr(p)) return p;
+    const mu = num(args, 1, ctx);
+    if (isErr(mu)) return mu;
+    const sigma = num(args, 2, ctx);
+    if (isErr(sigma)) return sigma;
+    if (sigma <= 0) return ERR.num;
+    if (p <= 0 || p >= 1) return ERR.num;
+    return mu + sigma * normalInv(p);
+  });
+}
+
+const SQRT_2PI = Math.sqrt(2 * Math.PI);
+
+const normalPdf = (z: number): number => Math.exp((-z * z) / 2) / SQRT_2PI;
+
+/**
+ * The standard normal CDF, by Graeme West's double-precision refinement of
+ * Hart's rational approximation. Accurate to about 1e-15 across the whole
+ * range, which matters because the tail is where a service level actually
+ * lives: a 99.9% target is 3.09 standard deviations out, and a cheap
+ * approximation that is fine near the mean is visibly wrong there.
+ */
+function normalCdf(z: number): number {
+  const a = Math.abs(z);
+  let tail: number;
+  if (a > 37) {
+    tail = 0;
+  } else {
+    const e = Math.exp((-a * a) / 2);
+    if (a < 7.07106781186547) {
+      let n = 3.52624965998911e-2 * a + 0.700383064443688;
+      n = n * a + 6.37396220353165;
+      n = n * a + 33.912866078383;
+      n = n * a + 112.079291497871;
+      n = n * a + 221.213596169931;
+      n = n * a + 220.206867912376;
+      let d = 8.83883476483184e-2 * a + 1.75566716318264;
+      d = d * a + 16.064177579207;
+      d = d * a + 86.7807322029461;
+      d = d * a + 296.564248779674;
+      d = d * a + 637.333633378831;
+      d = d * a + 793.826512519948;
+      d = d * a + 440.413735824752;
+      tail = (e * n) / d;
+    } else {
+      let cf = a + 0.65;
+      cf = a + 4 / cf;
+      cf = a + 3 / cf;
+      cf = a + 2 / cf;
+      cf = a + 1 / cf;
+      tail = e / cf / 2.506628274631;
+    }
+  }
+  return z > 0 ? 1 - tail : tail;
+}
+
+/**
+ * The inverse: Acklam's rational approximation (about 1.15e-9 relative) plus one
+ * Halley step against the CDF above, which takes it to full double precision.
+ */
+function normalInv(p: number): number {
+  const A = [
+    -3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.38357751867269e2,
+    -3.066479806614716e1, 2.506628277459239,
+  ];
+  const B = [
+    -5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1,
+    -1.328068155288572e1,
+  ];
+  const C = [
+    -7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734,
+    4.374664141464968, 2.938163982698783,
+  ];
+  const D = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416];
+  const LOW = 0.02425;
+
+  let x: number;
+  if (p < LOW) {
+    const q = Math.sqrt(-2 * Math.log(p));
+    x =
+      (((((C[0]! * q + C[1]!) * q + C[2]!) * q + C[3]!) * q + C[4]!) * q + C[5]!) /
+      ((((D[0]! * q + D[1]!) * q + D[2]!) * q + D[3]!) * q + 1);
+  } else if (p <= 1 - LOW) {
+    const q = p - 0.5;
+    const r = q * q;
+    x =
+      ((((((A[0]! * r + A[1]!) * r + A[2]!) * r + A[3]!) * r + A[4]!) * r + A[5]!) * q) /
+      (((((B[0]! * r + B[1]!) * r + B[2]!) * r + B[3]!) * r + B[4]!) * r + 1);
+  } else {
+    const q = Math.sqrt(-2 * Math.log(1 - p));
+    x =
+      -(((((C[0]! * q + C[1]!) * q + C[2]!) * q + C[3]!) * q + C[4]!) * q + C[5]!) /
+      ((((D[0]! * q + D[1]!) * q + D[2]!) * q + D[3]!) * q + 1);
+  }
+
+  const e = normalCdf(x) - p;
+  const u = e * SQRT_2PI * Math.exp((x * x) / 2);
+  return x - u / (1 + (x * u) / 2);
 }
 
 const mean = (ns: number[]): number => ns.reduce((a, b) => a + b, 0) / ns.length;
