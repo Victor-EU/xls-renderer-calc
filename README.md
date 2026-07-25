@@ -15,7 +15,7 @@ generated financial model renders as a labelled skeleton. The previous fix was a
 server-side LibreOffice recalc, which costs the preview its two defining
 properties: no server, and nothing leaves the browser.
 
-**Status: built and verified.** 79 tests green, 399 oracle probes at 100 %
+**Status: built and verified.** 80 tests green, 399 oracle probes at 100 %
 accuracy and zero false confidence, and a real-browser check confirming that a
 file with *no* cached values renders identical numbers to the same file after a
 LibreOffice recalc.
@@ -153,7 +153,12 @@ in IEEE-754 and `Math.round(2.675*100)/100` gives 2.67.
 
 ## What it computes
 
-Around 180 functions, chosen for what a generated financial model actually
+**197 functions** — the exact list is in [`CAPABILITY.md`](./CAPABILITY.md),
+generated from the function registry and asserted on every test run, so it cannot
+drift from the code. It doubles as an allowlist that can be published into the
+generator's prompt, so the renderer never meets a formula it cannot compute.
+
+They were chosen for what a generated financial model actually
 reaches for: math and rounding, statistics, the `*IF`/`*IFS` family with the
 criteria mini-language and wildcards, logical (with genuinely lazy `IF`,
 `IFERROR`, `IFS`, `CHOOSE`, `SWITCH`), text, dates including the 1900 leap-year
@@ -172,7 +177,8 @@ wrong number rather than an error:
 
 ### What it deliberately refuses
 
-Each of these renders ⚠ with the reason, and is listed in the UI:
+26 recognised functions plus two conditional cases. Each renders ⚠ with the
+reason and is listed in the UI:
 
 - `INDIRECT` and `OFFSET` — they build references at evaluation time, which
   breaks the static dependency graph.

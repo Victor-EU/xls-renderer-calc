@@ -1,957 +1,925 @@
-# Recalculate & render — a calculation layer for the client-side Excel renderer
+# Recalculate & render — the calculation layer for the client-side Excel renderer
 
-**Date:** 2026-07-25
-**Subject repo:** `/Users/vz/OSS excel render tests` (ExcelJS + numfmt, client-side, view-only, MIT)
-**Status: BUILT** — see `README.md` for what shipped and what did not.
+**Design date:** 2026-07-25 · **Built:** 2026-07-25 (commit `2e5822d`)
+**Status: BUILT.** This document describes the system as it exists and why it is
+shaped that way. `README.md` covers what it does and how to run it;
+`CAPABILITY.md` (generated) lists exactly what it computes.
 
-> **Build outcome, 2026-07-25.** The architecture below was implemented as
-> specified: overlay-not-mutation, fail-loud provenance, the raw-`t` probe
-> replacing the 0.25 heuristic, the LibreOffice oracle, the computed-vs-cached
-> audit. Phases 0–4 and 6 are done; the worker (P5) and write-back (P7) are not.
->
-> **Three things the build contradicted, and why:**
->
-> 1. **§2.1 / Appendix A: the closed `{SUM, IF}` grammar is wrong.** The
->    histogram was n=1. The actual generator path in the product is
->    `python_execute` + openpyxl written free-hand by a model
->    (`apps/api/src/tools/excel-export.ts:70`), so the vocabulary is open by
->    construction and a two-function engine would render ⚠ on the first real
->    model. Built broad (~180 functions) and gated by the oracle instead of
->    frozen against one sample. The fail-loud architecture is unchanged — it is
->    what makes a broad library safe.
->
-> 2. **§8.2 "range dependencies: not a v1 concern" is wrong.** Materialising one
->    edge per precedent cell is O(rows²); a 5,000-row model with a running total
->    is 12.5 M edges and ran out of memory at 45,000 formulas. The graph is not
->    materialised at all now — precedent *rectangles* are walked lazily by an
->    iterative DFS whose post-order is the topological order.
->
-> 3. **§8.3 "prefer explicit topo sort" over lazy recursion — for the right
->    reason, but the reason applies to the DFS too.** The search is iterative
->    because a row-to-row chain is as deep as the model is long. That is now a
->    test (`perf.test.ts`, 5,000-deep chain).
->
-> **§12.5 was right and underrated.** LibreOffice-is-not-Excel produced 29
-> declared divergences, and the biggest class was not financial functions but
-> *booleans*: LibreOffice treats them as plain numbers, so `TRUE=1`, `SUM` over a
-> range containing TRUE, and `COUNT` all differ. Following the oracle there would
-> have shipped Excel-incompatible arithmetic.
+Marker convention: **✓** = verified against real files or measured ·
+**✗** = the original design was wrong here, corrected with the reason ·
+**?** = still open.
 
-Marker convention used throughout:
-**✓** = verified today against real files/registries · **⚠** = vendor claim, not yet verified · **?** = open question.
+> **Read this first if you knew the earlier draft.** Three of its load-bearing
+> decisions did not survive contact with the build, and each is corrected in
+> place below rather than quietly edited away:
+>
+> | Original | What happened |
+> |---|---|
+> | §0/§5/App. A — build a **closed `{SUM, IF}` grammar** for our own files | ✗ The vocabulary is not closed. Built broad (197 functions) and gated by an oracle instead — §2.1, §5 |
+> | §8.2 — range dependencies are "**not a v1 concern**" | ✗ Materialising the graph is O(rows²) and ran out of memory at 45k formulas. The graph is no longer materialised — §8 |
+> | §12.5 — LibreOffice-vs-Excel divergence is a **financial-function** risk | ✗ Real, but the largest class was **booleans** — §12.5 |
+>
+> Everything else — overlay-not-mutation, the fail-loud doctrine, the raw-`t`
+> probe, the audit diff — was built as specified and holds up.
 
 ---
 
-## 0. Decision up front
+## 0. The decision, as it landed
 
-Build the calc layer **from scratch for our own generated files**, and **adopt an
-OSS wasm engine for everything else**, both behind one swappable interface.
+Build the evaluator **from scratch**, make it **broad**, and gate it with a
+**differential oracle**. Do not adopt a wasm engine. Keep LibreOffice headless as
+an explicit, user-consented escalation for files this engine refuses.
 
-The reason is measurement, not preference. The three-sheet sample model contains
-76 formulas whose *entire* function vocabulary is **`SUM` and `IF`** plus bare
-arithmetic (§2). A from-scratch evaluator covering that is small, zero-dependency,
-provably fail-loud, and adds nothing to the bundle. Meanwhile an arbitrary
-user-dropped `.xlsx` has an unbounded tail that no hand-written evaluator should
-pretend to cover — and there is now a genuinely permissive engine for it
-(`formualizer`, MIT/Apache-2.0, Rust→wasm ✓).
+The original reasoning reached "from scratch" via a different route — that our
+own generator's vocabulary was closed and tiny, so a few hundred lines would
+cover it completely, while an adopted engine would handle the open tail of
+arbitrary user files. The first half turned out to be false (§2.1), which removes
+the argument for a *small* engine but not the argument for our own one. What
+actually decides it:
 
-What must **not** happen: a partially-correct evaluator rendering a
-plausible-but-wrong number into a financial model. That is strictly worse than
-today's blank cell. Every design choice below is subordinate to that.
+1. **Fail-loud requires introspection.** The doctrine in §3 is worth nothing
+   unless the engine can say precisely what it could not do. An adopted engine
+   returns a value; it cannot tell you which of its answers you should not trust.
+   That property has to be built in, not wrapped around.
+2. **Breadth is safe when refusal is the default.** A large hand-written library
+   would be reckless if a gap produced a wrong number. Because a gap produces ⚠
+   instead, breadth costs coverage risk, not correctness risk — and the oracle
+   turns coverage risk into a measured number.
+3. **Zero dependencies, zero bundle surprise.** The engine has no dependencies at
+   all, runs in Node, a worker or the browser, and is debuggable in the same
+   language as its caller.
+
+The `formualizer` bake-off (§4) was **not run**. It was designed as the gate
+before writing our own engine, and skipping a planned measurement deserves to be
+stated plainly rather than glossed: the decision was made on the grounds above,
+which are about the shape of the requirement rather than about the candidate's
+quality. The interface it was meant to protect (§6.1) exists, so the measurement
+can still be made later if bundle weight or coverage ever argues for it.
 
 ---
 
 ## 1. The problem, mechanically
 
-### 1.1 What an agent writes
+*(Unchanged from the original — it was right.)*
 
-A cell in a worksheet part carries a formula and, separately, a **cached result**:
+A cell carries a formula and, separately, a **cached result**:
 
 ```xml
 <c r="B7" s="19" t="n"><f>B6/B4</f><v>0.59004854368932</v></c>
 ```
 
-`<f>` is the formula. `<v>` is the value Excel computed last time it saved.
-Every consumer that isn't a full spreadsheet application reads `<v>`.
+`<f>` is the formula. `<v>` is what Excel computed when it last saved. Every
+consumer that is not a spreadsheet application reads `<v>`.
 
-Agent-generated files (openpyxl, or hand-written OOXML) emit the formula with an
-**empty** cache: ✓ verified, from `public/financial-model-nocache.xlsx`:
+Agent-generated files emit the formula with an **empty** cache ✓:
 
 ```xml
 <c r="B7" s="19"><f>B6/B4</f><v></v></c>
 ```
 
-Excel and LibreOffice don't care — they compute on open. Our renderer, and every
+Excel and LibreOffice do not care — they compute on open. Our renderer, and every
 other cache-reading consumer, shows blank. In a financial model nearly every
 meaningful number is a formula, so the document renders as a labelled skeleton.
 
-### 1.2 The current fix, and why it's not enough
-
-Today: `soffice --headless --convert-to xlsx` recalculates and caches every
-formula. It works and it should stay (§13, tier 3). But it costs the project its
-three defining properties:
+The previous fix, `soffice --headless --convert-to xlsx`, works and stays as a
+fallback, but costs the preview its defining properties:
 
 | Property | LibreOffice recalc | Browser recalc |
 |---|---|---|
-| No server | ✗ needs a binary + process | ✓ |
-| Nothing leaves the browser | ✗ file must be uploaded | ✓ |
-| Real-time | ✗ ~1–3 s per call, per file | ✓ ms, per keystroke |
-
-The third is the one that changes the product rather than just fixing a bug (§9).
-
-### 1.3 What "real time" has to mean
-
-Three distinct requirements hide behind the phrase. Design for all three; they
-share one dependency graph.
-
-1. **On load** — compute everything, once, before first paint. Fixes the blanks.
-2. **On edit** — change an assumption, the model reflows. Turns a viewer into a
-   what-if tool. *This is the one with product value.*
-3. **On stream** — the agent is still writing the sheet; cells arrive as tool
-   calls and the render recomputes per patch. "Watch the model get built."
+| No server | ✗ needs a binary and a process | ✓ |
+| Nothing leaves the browser | ✗ the file must be uploaded | ✓ |
+| Fast | ✗ ~1–3 s per file | ✓ ~100 ms for 25,000 formulas ✓ measured |
 
 ---
 
-## 2. What we verified today (the empirical anchor)
+## 2. What measurement established
 
-Probes against the two sample files in `public/`. **All ✓.**
+### 2.1 ✗ The formula vocabulary is **not** closed
 
-### 2.1 Formula vocabulary — startlingly small
+The original draft probed the two sample files and found their entire function
+vocabulary to be `SUM` and `IF` — 23 calls across 76 formulas — and built its
+central decision on that: a closed grammar, 100 % coverage by construction, an
+allowlist published into the generator's prompt.
 
-| | `financial-model.xlsx` (recalc'd) | `-nocache.xlsx` |
-|---|---|---|
-| Formula cells | 76 | 75 |
-| Uncached | **5** (6.6% — legitimately empty) | **75** (100%) |
-| Shared-formula-only cells | 0 | 0 |
-| Cross-sheet refs | 19 cells | 19 cells |
-| **Functions used** | **`IF`×12, `SUM`×11** | **`IF`×12, `SUM`×11** |
-| Ref shapes | arithmetic ×57, cross-sheet ×19, string literal ×12, range `A1:B2` ×11, absolute `$` ×11 | identical |
+It flagged its own caveat ("n=1 model, written by one generator") and then treated
+the number as load-bearing anyway. It should not have been. The generator path in
+the product is explicit that structured export writes *values*, and that a
+formula-driven workbook comes from **`python_execute` + openpyxl written
+free-hand by a model** (`apps/api/src/tools/excel-export.ts:70`). The vocabulary
+is therefore whatever an LLM types: `ROUND`, `IFERROR`, `NPV`, `IRR`, `XIRR`,
+`SUMIF`, `INDEX`/`MATCH`, `EOMONTH`, `TEXT`. A `{SUM, IF}` engine would have
+rendered ⚠ on the first real model.
 
-**Two functions.** Everything else is `+ - * /`, cross-sheet references,
-ranges, and absolute refs. This is the single most important number in the
-document: it says the closed-vocabulary evaluator (§5, §7) is a few hundred lines
-that reaches **100% coverage** on the corpus we actually care about — not an
-aspiration.
+**What replaced it:** 197 implemented functions, chosen for what a generated
+financial model reaches for, with every one of them measured against LibreOffice
+(§12). The closed-grammar *mechanism* survived in a better form —
+`CAPABILITY.md` is generated from the registry and can still be published into
+the generator's prompt as an allowlist. The floor is declared; it is just wider,
+and it is derived from the code rather than from a sample of one.
 
-Caveat before over-generalising: n=1 model, written by one generator
-(`gen_model.py`). Phase 0 must widen this histogram across real agent output
-before the closed set is frozen (§14, §15 R4).
+The general lesson is worth keeping: a histogram over one artefact measures the
+artefact, not the population. The corpus is still synthetic and this remains the
+weakest evidence in the project (§16).
 
-### 2.2 The per-cell ambiguity is resolvable — `parse.ts` can stop guessing
+### 2.2 ✓ The per-cell ambiguity is resolvable — and the heuristic is gone
 
-`src/excel/parse.ts` carries a documented limitation:
+The old renderer carried a documented limitation: a formula that legitimately
+computes to `""` is indistinguishable, per cell, from one that was never
+computed, so it judged at file level with `RECALC_THRESHOLD = 0.25`.
 
-> A formula that legitimately computes to an empty string is indistinguishable,
-> per-cell, from one that was never computed (ExcelJS surfaces both as `{formula}`
-> with no result). So we judge at the file level […] `RECALC_THRESHOLD = 0.25`.
-
-That is true *of ExcelJS*, but **not true of the file**. ✓ The raw XML
-distinguishes them by the `t` (cell type) attribute:
+True of ExcelJS, not of the file. The raw `t` attribute decides it ✓:
 
 | Case | Raw XML | `t` |
 |---|---|---|
-| Computed to empty string | `<c r="G9" t="str"><f>IF(G9=0,"",F9/G9-1)</f><v></v></c>` | **`str`** |
+| Computed to an empty string | `<c r="G9" t="str"><f>IF(G9=0,"",F9/G9-1)</f><v></v></c>` | **`str`** |
 | Never computed | `<c r="F4"><f>SUM(B4:E4)</f><v></v></c>` | **absent** |
 
-A formula cell with an empty `<v>` and **no `t`** was never computed. With
-`t="str"` it computed to `""`. ExcelJS drops `t` on the floor, which is why the
-0.25 heuristic exists.
+`packages/xlsx-preview/src/ooxml.ts` reads the sheet parts directly and decides
+per cell. The heuristic is deleted, and the file-level count it approximated
+(`facts.uncached`) is now exact.
 
-Two consequences:
-- A ~30-line raw-XML probe (unzip `xl/worksheets/*.xml`, regex the `<c>` tags for
-  `r`, `t`, presence of `<f>`, emptiness of `<v>`) replaces the heuristic with
-  **exact per-cell truth** — independently of the whole calc layer. Cheap,
-  standalone, ships first.
-- Once we can *evaluate*, the question dissolves anyway: compute the cell; if the
-  answer is `""`, it's legitimately empty. The heuristic is retired twice over.
+The same pass earns its keep twice more. It recovers **shared formulas**
+correctly — OOXML stores `<f t="shared" ref="B2:E2" si="0">` once and siblings
+reference it by `si`, so a reader that returns the master text verbatim reports
+four cells as computing the first cell's numbers; here the master's AST is
+translated by each sibling's offset. And it surfaces array-formula masters and
+the `date1904` flag, both of which ExcelJS obscures.
 
-### 2.3 `fullCalcOnLoad` is already set — by openpyxl, and LibreOffice strips it
-
-I expected this to be a missing one-line win. It isn't, and the direction is the
-opposite of intuition. ✓
+### 2.3 ✓ `fullCalcOnLoad`, and who sets it
 
 | File | `<calcPr>` |
 |---|---|
 | `-nocache.xlsx` (openpyxl) | `<calcPr calcId="124519" fullCalcOnLoad="1"/>` |
 | `financial-model.xlsx` (after LO) | `<calcPr iterateCount="100" refMode="A1" iterate="false" iterateDelta="0.0001"/>` |
 
-openpyxl already sets `fullCalcOnLoad="1"`, so a user who *downloads* the
-un-recalced file and opens it in Excel sees correct numbers. The blanks are
-**our renderer's problem specifically**, not a defect in the file.
+openpyxl already sets it, so a user who *downloads* the un-recalced file and
+opens it in Excel sees correct numbers. The blanks were our renderer's problem
+specifically. `readXlsx` reports the flag (`facts.fullCalcOnLoad`) but does not
+act on it; it matters only for the write-back path (§13.2), which is not built.
 
-So the recommendation narrows: `fullCalcOnLoad` is only a real gap for a
-**hand-written OOXML** path that omits `<calcPr>` — worth a one-line assertion in
-whatever writer the agent uses, and worth re-adding after a LibreOffice round-trip
-(LO drops it, which is harmless only because LO also cached every value).
+### 2.4 ✓ Precision, as actually written
 
-Incidentally, LO's `calcPr` hands us Excel's iterative-calculation defaults for
-free: `iterateCount=100`, `iterateDelta=0.0001`, `iterate=false`. Use exactly
-those when implementing circular-reference policy (§7.10).
+LibreOffice wrote `0.59004854368932` for `B6/B4` — 14 significant digits, where
+the IEEE-754 double carries 17. This sets the comparison policy everywhere:
+floats are compared with a **relative** epsilon of `1e-9`, never `===`. It is
+used identically by the oracle comparator, the computed-vs-cached diff
+(`valuesAgree` in `workbook.ts`) and the audit pass.
 
-### 2.4 Precision, as actually written
+### 2.5 ✓ No `calcChain.xml` in either file
 
-LO wrote `0.59004854368932` for `B6/B4` — 14 significant digits. The IEEE-754
-double is `0.5900485436893203…`. Excel stores full precision and *displays* 15
-significant digits. This sets the oracle-diff tolerance policy (§12.3): compare
-floats with a **relative** epsilon around `1e-9`, never `===`.
+Neither sample has one. `readXlsx` reports `facts.hasCalcChain` so the write-back
+path can strip a stale one rather than author it.
 
-### 2.5 No `calcChain.xml` in either file
+### 2.6 ✓ Measured, after the build
 
-✓ Neither sample has one. `calcChain.xml` is an optional Excel optimisation
-recording evaluation order; a stale one causes Excel to complain. Our write-back
-path (§13.2) should therefore **not** attempt to author it — just omit it (and
-delete it, plus its content-type override and relationship, if a source file has
-one). Excel rebuilds it.
-
-### 2.6 Live baseline of the existing renderer
-
-Measured in Chrome today: parse 12.4 KB / 3 sheets / 219 cells / 76 formulas in
-**74 ms**; nocache file **75/75 un-cached**, trap banner fires; zero console
-errors. Whatever recalc costs, it is measured against a 74 ms parse.
+| | Before | After |
+|---|---|---|
+| Nocache sample | 75/75 formulas blank | 75/75 computed, 0 unsupported, ~1 ms |
+| Cached vs computed render | — | **all 232 rendered cells identical** ✓ browser-verified |
+| Parse (ExcelJS + raw pass) | 74 ms | 39–89 ms |
+| 25,000 local-arithmetic formulas | — | ~100 ms |
 
 ---
 
 ## 3. Failure modes, ranked
 
-Design against these in order. The ranking is what makes this a *finance*
-renderer rather than a generic one.
+*(Unchanged. This ordering is the ethical content of the design, and everything
+else is subordinate to it.)*
 
-| # | Failure | Severity | Mitigation |
+| # | Failure | Severity | Mitigation, as built |
 |---|---|---|---|
-| 1 | **Renders a wrong number confidently** (bad coercion, unimplemented function silently treated as 0, wrong lookup semantics) | **Catastrophic** — invisible, and it's a financial figure | Fail-loud doctrine §10. Unsupported → `#UNSUPPORTED`, never a guess. Closed grammar rejects at *parse* time, not eval time |
-| 2 | Renders blank (today) | Bad | The whole point of this work |
-| 3 | Renders `#UNSUPPORTED` where Excel has a value | Acceptable | Honest. Counted, surfaced, drives the coverage backlog |
-| 4 | Slow / blocks the UI | Annoying | Worker + incremental §9 |
-| 5 | Bundle bloat for files that don't need calc | Annoying | Lazy `import()` gated on detection §8.4 |
+| 1 | **Renders a wrong number confidently** | **Catastrophic** — invisible, and it is a financial figure | §10 doctrine; refusals throw rather than return; oracle gates false confidence at zero (§12) |
+| 2 | Renders blank | Bad | The whole point of this work — fixed |
+| 3 | Renders ⚠ where Excel has a value | Acceptable | Honest. Counted, surfaced, drives the backlog |
+| 4 | Slow or blocks the UI | Annoying | §9 — measured; the worker is deferred with a stated reason |
+| 5 | Bundle bloat for files that need no calc | Annoying | The engine is dependency-free; no wasm was adopted |
 
-The asymmetry between #1 and #3 is the entire ethical content of this design.
-An engine that says "I don't know" is a tool. An engine that guesses is a
-liability, and in a model the guess is unfalsifiable by eye.
-
----
-
-## 4. Engine landscape (verified 2026-07-25)
-
-`npm view` metadata is ✓; capability claims are ⚠ from READMEs.
-
-| Package | License ✓ | Version ✓ | Maintainers ✓ | Capabilities ⚠ |
-|---|---|---|---|---|
-| **`formualizer`** | **MIT OR Apache-2.0** | 0.7.1 | 1 (`psu3d0`) | Rust→wasm. `Workbook.fromXlsxBytes()`, `setValue/setFormula`, `evaluateCell/evaluateAll`, `readRange`, `tokenize/parse`. 400+ fns; Arrow-backed storage; incremental dep tracking + cycle detection; topological scheduling; dynamic arrays w/ spill (`FILTER`/`UNIQUE`/`SORT`/`XLOOKUP`); xlsx r/w via calamine+umya. Self-described "production-grade", v0.6+; "span evaluation experimental, opt-in". Pitched at "high-trust agent workflows" |
-| **`@ironcalc/wasm`** | MIT/Apache-2.0 | 0.7.0 | 1 (`n.hatcher`) | Rust→wasm, xlsx reader+writer, `model.evaluate()`. README self-describes as **early-stage WIP**. EC-grant funded; IronCalc GmbH (Berlin, early 2026) |
-| `hyperformula` | **GPL-3.0-only** (or paid proprietary) | 3.3.0 | 5 (Handsontable) | The mature option: 400+ fns, CRUD, undo/redo, incremental recalc, named expressions |
-| `@formulajs/formulajs` | MIT | 4.6.0 | 1 | ~500 Excel *functions* as plain JS. **No parser, no cell refs, no dep graph.** An ingredient |
-| `fast-formula-parser` | MIT | 1.0.19 | 1 | Parser + evaluator w/ ref callbacks, ~300 fns. **Last publish ≈6 years ago** |
-
-### Reading of the table
-
-- **HyperFormula is disqualified by license,** not by quality. GPL-3.0-only
-  means either the consuming product goes open source or a commercial licence is
-  purchased. Worth knowing the paid door exists; not the default path.
-- **`formualizer` is the lead adoption candidate.** It is the only permissive
-  option that ships parser + evaluator + dependency graph + xlsx ingest + wasm in
-  one package, and its stated design goals (determinism, agent workflows) line up
-  with this use case unusually well. Its risks are maturity (v0.7.x) and
-  bus factor (1) — mitigated by MIT + Rust: it can be vendored and forked.
-- **`@formulajs/formulajs` remains useful even in the from-scratch path** as a
-  vetted, MIT source of *individual function* implementations (`NPV`, `IRR`,
-  `PMT`, `EOMONTH`…). Borrow the function bodies; keep our own parser, graph, and
-  coercion rules — which is where correctness actually lives.
-- `fast-formula-parser` is stale. Its architecture (evaluate with `onCell`/
-  `onRange` callbacks) is nonetheless the right shape and worth reading for design.
-
-Both wasm candidates need a **bundle-size measurement** before adoption — the
-current app is 360 KB gzip total, and a Rust spreadsheet engine could rival that.
-Unmeasured ⚠; §12 answers it.
+The asymmetry between #1 and #3 is the entire argument. An engine that says "I
+don't know" is a tool. An engine that guesses is a liability, and in a model the
+guess is unfalsifiable by eye.
 
 ---
 
-## 5. The reframe: two problems wearing one hat
+## 4. Engine landscape (verified 2026-07-25, not re-checked since)
 
-"Recalculate xlsx" is two problems with opposite correct answers. Conflating them
-is what makes the build-vs-adopt question feel hard.
+| Package | License ✓ | Version ✓ | Notes |
+|---|---|---|---|
+| `formualizer` | **MIT OR Apache-2.0** | 0.7.1 | Rust→wasm, parser + evaluator + graph + xlsx ingest. The lead candidate if one were adopted |
+| `@ironcalc/wasm` | MIT/Apache-2.0 | 0.7.0 | Rust→wasm; README self-describes as early-stage |
+| `hyperformula` | **GPL-3.0-only** | 3.3.0 | The mature option, **disqualified by license** — not by quality |
+| `@formulajs/formulajs` | MIT | 4.6.0 | ~500 Excel functions as plain JS. **No parser, no refs, no graph.** An ingredient |
+| `fast-formula-parser` | MIT | 1.0.19 | Right architecture, last published ≈6 years ago |
 
-|  | **Problem A — our own agent's output** | **Problem B — arbitrary user `.xlsx`** |
-|---|---|---|
-| Formula vocabulary | **Closed and declarable.** Measured: `SUM`, `IF`, arithmetic (§2.1) | Open, unbounded tail |
-| Who controls it | We do — we write the generator prompt | Nobody |
-| Right answer | **From scratch.** ~600–900 LOC, zero deps, no bundle cost, provably fail-loud because anything outside the grammar is rejected at parse time | **Adopt an engine.** The tail isn't functions, it's coercion semantics (§7) — hand-rolling that is how you get failure mode #1 |
-| Coverage target | **100%** of the declared grammar, gate-enforced | Best-effort + honest gaps + LO fallback |
-| Volume | The common case, every render | Occasional (drag-and-drop) |
+The table stands as a record. Nothing from it was adopted; `@formulajs/formulajs`
+was not used even as a source of function bodies, because the value in this
+engine is the coercion and argument-mode rules *around* the functions (§7), not
+the arithmetic inside them.
 
-### 5.1 The closed loop this unlocks
+---
 
-Because we control the generator, the evaluator's supported set can be
-**published into the generation prompt as a formula allowlist**. The renderer
-then never meets a formula it can't compute, *by construction*, and the guarantee
-is enforceable in CI: parse every generated model, assert every formula parses
-under the closed grammar.
+## 5. ✗ The reframe that collapsed
 
-This inverts the usual dependency — instead of chasing Excel's surface area, we
-declare a floor and hold the generator to it. Widening the floor is then a
-deliberate, tested act (add function → implement → oracle-diff → add to prompt),
-not a bug report from a user staring at a blank cell.
+The original framed this as two problems with opposite answers: **A**, our own
+generator's output, closed and declarable, answered by a small from-scratch
+evaluator; and **B**, arbitrary user files, open and unbounded, answered by an
+adopted engine.
 
-*Guarantee the floor; don't cap the ceiling.* Problem B keeps the ceiling open via
-the adopted engine and the LO fallback — a user's hand-built model with
-`XLOOKUP` and dynamic arrays still renders, just through a different tier.
+The distinction dissolved when §2.1 showed Problem A's vocabulary is open too.
+Both are the same problem, and it is not "which functions" — it is **which
+behaviours**. What survives, and is what the build is actually organised around:
+
+> *Guarantee the floor; don't cap the ceiling.* The floor is declared
+> (`CAPABILITY.md`), enforced by refusal rather than by hope, and can be
+> published into the generator's prompt. The ceiling stays open through the
+> LibreOffice escalation (§13.1) for anything the floor does not cover.
 
 ---
 
 ## 6. Architecture
 
-### 6.1 Overlay, not mutation
+### 6.1 Overlay, not mutation ✓ built as designed
 
 ```
-        ┌───────────────────────────────────────────────────────────┐
-buf ──► │ parse.ts        ExcelJS workbook (unchanged, source of    │
-        │                 truth for style/format/merge/layout)      │
-        └──────────┬────────────────────────────────────────────────┘
-                   │ formulas + cached values + raw `t` probe (§2.2)
-                   ▼
-        ┌───────────────────────────────────────────────────────────┐
-        │ recalc.ts       RecalcEngine (swappable)                  │
-        │                   ├─ ClosedGrammarEngine  (ours, §7)      │
-        │                   ├─ FormualizerEngine    (wasm, §4)      │
-        │                   └─ NullEngine           (cached-only)   │
-        └──────────┬────────────────────────────────────────────────┘
-                   │ ValueOverlay
-                   ▼
-        ┌───────────────────────────────────────────────────────────┐
-        │ ExcelView.tsx   renders overlay[addr] ?? cachedValue,     │
-        │                 badges by provenance, ⚠ on unsupported    │
-        └───────────────────────────────────────────────────────────┘
+buf ─┬─► ExcelJS ─────────────► styles, fonts, fills, borders, merges,
+     │   (parse.ts)             column widths, frozen panes
+     │
+     └─► ooxml.ts ────────────► formulas, raw `t`, shared-formula
+         (fflate + xml.ts)      translation, defined names, date1904
+                    │
+                    ▼
+              bind.ts ──► Workbook (formula-engine) ──► evaluateAll()
+                    │
+                    ▼
+              ValueOverlay: value + provenance + the file's own value
+                    │
+                    ▼
+              ExcelView.tsx / audit.ts
 ```
 
-**Never write computed values back into the ExcelJS workbook.** The overlay is a
-side table. Three things depend on that choice:
+**Computed values never overwrite the file's cached ones.** Three things depend
+on that, and all three shipped:
 
 1. **Provenance.** Every rendered number knows where it came from. In a financial
-   preview that is not a nicety; it's the difference between a view and a claim.
-2. **The diff.** Cells with *both* a cached and a computed value can be compared
-   (§11) — which is a genuine audit feature, and impossible if you overwrite.
-3. **Swappability.** Engines are interchangeable and A/B-comparable against each
-   other and against the oracle if none of them mutate shared state. Same
-   discipline as keeping the PDF parser swappable.
+   preview that is the difference between a view and a claim.
+2. **The diff.** Cells with both a cached and a computed value can be compared —
+   a genuine audit feature (§11), impossible if you overwrite.
+3. **Swappability.** Engines stay interchangeable because none of them share
+   mutable state with the renderer.
 
-### 6.2 Types
+**Two passes over the same bytes**, each doing what it is best at. ExcelJS's
+style fidelity is proven — it is the renderer the earlier spike validated cell by
+cell against a real model — and rewriting `styles.xml` handling would be
+regression risk with no upside. But it drops the `t` attribute, so it is not
+trusted for values. Both passes get their own copy of the buffer: ExcelJS
+detaches the ArrayBuffer it is handed, and a detached buffer read afterwards
+yields zero bytes rather than an error.
+
+### 6.2 Types, as built
 
 ```ts
-type Addr = string;                     // "Income Statement!F4" — interned to int internally
-
-type CellValue =
-  | { t: 'num';   v: number }
-  | { t: 'str';   v: string }
-  | { t: 'bool';  v: boolean }
-  | { t: 'date';  v: Date }             // serial → Date at the boundary, not inside eval
-  | { t: 'err';   v: ExcelError };      // '#DIV/0!' | '#VALUE!' | '#REF!' | '#NAME?'
-                                        // | '#NUM!' | '#N/A' | '#NULL!' | '#SPILL!' | '#CALC!'
-
 type Provenance =
-  | 'cached'        // came from <v> in the file — we did not touch it
-  | 'computed'      // we evaluated it
-  | 'unsupported'   // formula outside engine capability — rendered as ⚠, never guessed
-  | 'circular'      // participates in a reference cycle
-  | 'volatile';     // computed, but depends on NOW/TODAY/RAND — frozen at load
+  | 'literal'      // straight from <v>, no formula
+  | 'cached'       // read from the file's formula cache; not recomputed
+  | 'computed'     // we evaluated it
+  | 'unsupported'  // outside capability — renders ⚠, never a number
+  | 'circular'     // part of, or downstream of, a reference cycle
+  | 'volatile';    // computed, but depends on NOW/TODAY/RAND
 
-type OverlayCell = {
-  value: CellValue | null;
-  src: Provenance;
-  cached?: CellValue;     // retained when it existed and differs → feeds §11
-  reason?: string;        // why unsupported — the coverage backlog, verbatim
-  ms?: number;            // per-cell eval cost, for profiling hot spots
-};
-
-type ValueOverlay = {
-  cells: Map<Addr, OverlayCell>;
-  stats: {
-    formulas: number; computed: number; cached: number;
-    unsupported: number; circular: number; mismatched: number;
-    engine: string; totalMs: number;
-  };
-  gaps: Array<{ fn?: string; shape?: string; count: number; sample: Addr }>;
-};
-
-interface RecalcEngine {
-  readonly name: string;
-  readonly capabilities: { functions: Set<string>; features: Set<Feature> };
-  load(wb: ExcelJS.Workbook, raw?: RawProbe): Promise<void>;
-  evaluateAll(): Promise<ValueOverlay>;
-  setValue(addr: Addr, v: CellValue): Promise<CellPatch[]>;   // incremental — §9.2
-  setFormula(addr: Addr, f: string): Promise<CellPatch[]>;    // streaming — §9.3
-  trace(addr: Addr): { precedents: Addr[]; dependents: Addr[] };  // §11.2
+interface CellRecord {
+  value: Scalar;         // number | string | boolean | ExcelError | null(blank)
+  provenance: Provenance;
+  cached?: Scalar;       // retained when the file had one → feeds §11
+  reason?: string;       // why unsupported — the backlog, verbatim
 }
 ```
 
-`gaps` is deliberately part of the contract. An engine must be able to say what
-it couldn't do, aggregated, or the fail-loud doctrine has no reporting surface.
+The original sketched a `RecalcEngine` interface with `load` / `evaluateAll` /
+`setValue` / `setFormula` / `trace`. The built shape is the `Workbook` class
+carrying the same surface — `evaluateAll()`, `precedents()` for trace,
+`tryEvaluate()` for speculative evaluation — with `setValue`/`setFormula` as
+authoring rather than incremental-edit entry points, because incremental recalc
+(§9.2) is not built.
 
-### 6.3 Module layout in the subject repo
+One type decision the original did not call out, and that carries more weight
+than any function: **blank is `null`, distinct from `""` and from `0`.** An empty
+cell is 0 in arithmetic, equals *both* 0 and `""` in comparison, and is invisible
+to `COUNT`. `""` does none of that. Collapsing them is a whole class of silent
+wrong answers — and keeping them apart is exactly what makes the sample model's
+own `IF(G9=0,"",F9/G9-1)` guard work over a column with no prior-year data.
+
+### 6.3 Module layout, as built
 
 ```
-src/excel/
-  parse.ts          (exists) + raw `t` probe → exact per-cell uncached truth §2.2
-  format.ts         (exists) — isUncachedFormula() becomes overlay-aware
-  theme.ts          (exists) — untouched
-  ExcelView.tsx     (exists) + provenance badges, diff mode, trace highlight
-  recalc/
-    index.ts        RecalcEngine interface + engine selection/fallback ladder
-    overlay.ts      ValueOverlay construction, stats, gap aggregation
-    graph.ts        dependency graph, topo order, SCC cycle detection  §8
-    worker.ts       off-main-thread host + message protocol            §9.1
-    closed/         ── ours, Problem A ──
-      grammar.ts    declared closed grammar (Appendix A) — the contract
-      lex.ts        tokenizer
-      parse.ts      Pratt parser → AST, rejects anything off-grammar
-      refs.ts       A1 parsing, ranges, cross-sheet, absolute, defined names
-      coerce.ts     Excel type-coercion rules                          §7.2
-      fns/          SUM, IF, … one file per group, each with oracle tests
-      eval.ts       AST walk over the graph
-    formualizer/    ── adopted, Problem B ── thin adapter to the wasm engine
+packages/formula-engine/src/
+  values.ts       the value model — blank, errors, Matrix, RefValue
+  errors.ts       Unsupported (a refusal) vs ExcelError (a value)
+  a1.ts           addressing, 1-based throughout, id packing
+  lexer.ts        tokenizer
+  parser.ts       Pratt parser; Excel precedence incl. the two traps
+  ast.ts          nodes, walk, translate (shared formulas), unparse
+  coerce.ts       Excel's coercion rules — the highest-risk surface
+  interpreter.ts  evaluation, error propagation, array broadcasting
+  workbook.ts     storage, evaluation order, cycles, provenance
+  functions/      registry + math, stats, logical, text, info,
+                  lookup, conditional, dates, financial, format-hook
+
+packages/xlsx-preview/src/
+  xml.ts          minimal XML pull parser
+  ooxml.ts        raw formula reader — the `t` attribute, shared formulas
+  bind.ts         file → engine → ValueOverlay
+  audit.ts        the hardcoded-cell detector
+  parse.ts        orchestration (ExcelJS + raw)
+  view/           ExcelView.tsx, format.ts (numfmt), theme.ts
+
+apps/demo/        the preview at :5176
+tools/oracle/     suites.py, generate.py, divergences.json, oracle.test.ts
+tools/verify/     drive.mjs (browser E2E), scale.mjs, shot.mjs
 ```
 
 ---
 
-## 7. Evaluation semantics — the part that decides correctness
+## 7. Evaluation semantics — where compatibility actually lives
 
-Function *count* is a vanity metric. Excel compatibility lives almost entirely in
-coercion, precision, and error propagation. This is the catalogue a from-scratch
-evaluator must consciously accept or reject; each item is either implemented and
-oracle-tested, or **outside the declared grammar and rejected at parse**.
+Function *count* is a vanity metric; compatibility lives in coercion, precision
+and error propagation. This section was the original's best contribution and is
+kept as the checklist it was, annotated with what shipped.
 
-### 7.1 Operator precedence, including Excel's oddities
+### 7.1 ✓ Operator precedence, including the oddities
 
-Highest → lowest: `:` (range) → ` ` (intersection) → `,` (union) → unary `-` →
-`%` (postfix) → `^` → `*` `/` → `+` `-` → `&` → comparisons (`=` `<>` `<` `>` `<=` `>=`).
+Implemented in `parser.ts` and asserted twice — in `parser.test.ts` for structure
+and in the oracle for value:
 
-Two traps worth writing tests for immediately:
-- **`-2^2 = 4`** in Excel. Unary minus binds *tighter* than `^`, unlike ordinary
-  mathematical convention and unlike most programming languages.
-- **`2^3^2 = 64`** — `^` is **left**-associative in Excel (`(2^3)^2`), not right.
+- **`-2^2 = 4`** — unary minus binds *tighter* than `^`, unlike mathematics and
+  unlike every C-family language.
+- **`2^3^2 = 64`** — `^` is **left**-associative in Excel.
 
-Intersection (space) and union (comma) operators: out of the closed grammar,
-rejected at parse. They're vanishingly rare in generated models and easy to
-mis-parse into something plausible.
+Both produce a plausible wrong number rather than an error when got wrong, which
+is why they are pinned in two places.
 
-### 7.2 Type coercion — the highest-risk area
+Intersection (space) and union (comma) were slated for rejection; both are
+**implemented** instead, because once references are a first-class value type
+they are a few lines each and `#NULL!` becomes expressible.
 
-| Situation | Excel result | Note |
+### 7.2 ✓ Type coercion — the highest-risk area
+
+All implemented in `coerce.ts` and probed by the `coercion` suite:
+
+| Situation | Excel | Note |
 |---|---|---|
-| `"5"+1` | `6` | Arithmetic **does** coerce numeric text |
-| `"5"=5` | `FALSE` | Comparison does **not**. Different rules per context |
-| `TRUE+1` | `2` | Booleans coerce in arithmetic |
+| `"5"+1` | `6` | arithmetic **does** coerce numeric text |
+| `"5"=5` | `FALSE` | comparison does **not** — different rules per context |
+| `TRUE+1` | `2` | booleans coerce in arithmetic |
 | `TRUE=1` | `FALSE` | …but not in comparison |
-| Sort/compare order | number < text < boolean | Cross-type comparison is by type rank |
-| `"a"+1` | `#VALUE!` | Non-numeric text in arithmetic errors |
-| `""+1` | `#VALUE!` | Empty *string* ≠ empty *cell* |
+| sort/compare order | number < text < boolean | cross-type comparison is by type rank |
+| `"a"+1`, `""+1` | `#VALUE!` | an empty *string* is not an empty *cell* |
 
-### 7.3 Empty-cell semantics — and why this model already depends on it
+The boolean rows are also where LibreOffice disagrees with Excel (§12.5), which
+made them the most consequential rows in the table.
 
-An empty cell is **not** an empty string. In arithmetic it is `0`; in comparison
-it equals **both** `0` and `""`.
+### 7.3 ✓ Empty-cell semantics
 
-This is not academic. The sample model's own formula is:
+Implemented, and the reason the model's `IF(G9=0,"",F9/G9-1)` renders a clean
+blank instead of twelve `#DIV/0!`. One addition the original missed: a formula's
+*final* value is never blank — `=J1` over an empty J1 is `0` in Excel, so blank
+collapses to 0 at the cell boundary while staying distinct inside an expression.
+That distinction was found by the oracle, not by reasoning.
 
-```
-IF(G9=0,"",F9/G9-1)      ← G9 is empty (no prior-year column)
-```
-
-`G9=0` → **TRUE** for an empty G9 → returns `""` → LO writes `t="str"` with an
-empty `<v>` (✓ §2.2). An evaluator lacking the empty-cell rule computes `G9=0`
-as FALSE, evaluates `F9/G9`, and renders **`#DIV/0!`** where Excel renders a
-clean blank. One rule, twelve wrong cells in a 76-formula model.
-
-This is the concrete case for "semantics over function count", and it's the
-first unit test to write.
-
-### 7.4 Numbers and precision
+### 7.4 ✓ Numbers and precision
 
 - All arithmetic is IEEE-754 double.
-- Excel *displays* 15 significant digits; it stores full precision. Rendering
-  goes through `numfmt` already, so display is handled — but the **oracle diff**
-  must use a relative epsilon (§12.3), never `===`. ✓ §2.4 shows LO writing 14
-  digits for a value whose double has 17.
-- Excel applies a small "cosmetic rounding" when a subtraction result is very
-  near zero (the classic `0.1+0.2-0.3` case). Decide explicitly: **do not**
-  emulate it in v1; record it as a known divergence with a test that documents
-  the difference rather than asserting Excel's behaviour.
+- **`ROUND` rounds the decimal value, not the binary double.** `ROUND(2.675,2)`
+  is `2.68`; in IEEE-754 2.675 is really 2.67499999999999982, so
+  `Math.round(2.675*100)/100` gives 2.67 — a one-cent disagreement in any model
+  with rounded currency. `excelRound` rounds the 15-significant-digit decimal
+  string instead. The original correctly declined to emulate Excel's cosmetic
+  near-zero rounding, and that decision stands.
+- **General-format text switches to scientific at `1E16` and `1E-15`** ✓
+  measured by bracketing probes, not assumed. The original had no position on
+  this; a guess would have been wrong by ten orders of magnitude.
 
-### 7.5 Dates
+### 7.5 ✓ Dates
 
-- Dates are serial numbers; times are the fractional part.
-- **The 1900 leap-year bug:** serial 60 is a phantom 1900-02-29. Any serial→date
-  conversion must reproduce it to stay aligned with Excel.
-- **The 1904 date system** exists (`<workbookPr date1904="1"/>`, legacy Mac).
-  Read the flag; if set and we don't support it, that's a **file-level**
-  `unsupported`, not a silent 4-year error.
-- Keep serials internally; convert to `Date` only at the render boundary.
-  `numfmt` already takes a JS `Date` directly for codes like `mmm-yyyy`.
+Serials, with the **1900 leap-year bug reproduced deliberately** — serial 60 is a
+phantom 1900-02-29, and an engine that "fixes" it disagrees with Excel on every
+date in the file. The **1904 system is supported**, not refused as the original
+proposed: reading the flag is trivial and the failure mode of ignoring it is a
+silent four-year error, which is a failure-mode-#1 outcome for a one-line saving.
+Serial → `Date` conversion happens only at the render boundary.
 
-### 7.6 Errors and propagation
+### 7.6 ✓ Errors and propagation
 
-Nine error values (`#DIV/0!`, `#VALUE!`, `#REF!`, `#NAME?`, `#NUM!`, `#N/A`,
-`#NULL!`, `#SPILL!`, `#CALC!`). Rules: errors propagate through operators and
-most functions; `IFERROR`/`IFNA`/`ISERROR`/`ISNA` trap them; `#N/A` has distinct
-handling from the rest. Critically — **an Excel error is a legitimate computed
-value, not an engine failure.** `#DIV/0!` from a genuine divide-by-zero renders as
-`#DIV/0!` with provenance `computed`. Only *our* inability to evaluate produces
-`unsupported`. Conflating these two would make the honesty layer meaningless.
+Nine error values, propagating through operators and trapped by
+`IFERROR`/`IFNA`/`ISERROR`/`ISNA`. The critical rule holds throughout:
+**an Excel error is a legitimate computed value, not an engine failure.**
+`#DIV/0!` renders as `#DIV/0!` with provenance `computed`. Only *our* inability
+to evaluate produces `unsupported`. `errors.ts` makes the distinction structural —
+a refusal is a thrown `Unsupported`, which cannot accidentally become a cell
+value.
 
 ### 7.7 References
 
-| Shape | Example | Closed grammar? |
-|---|---|---|
-| Relative / absolute | `B4`, `$B$4`, `B$4` | ✓ (✓ present: 11 cells) |
-| Range | `B4:E4` | ✓ (✓ present: 11 cells) |
-| Cross-sheet, quoted names | `'Income Statement'!F4` | ✓ (✓ present: 19 cells — **quoting is mandatory**, the sheet name has a space) |
-| Whole column / row | `A:A`, `1:1` | v2 — needs a used-range bound to avoid 1M-cell expansion |
-| Defined names | `TaxRate` | v2 — parse `xl/workbook.xml` `<definedNames>` |
-| 3D refs | `Sheet1:Sheet3!A1` | ✗ reject |
-| Structured table refs | `Table1[Revenue]` | ✗ reject (v3 — needs table parts) |
-| `INDIRECT` / `OFFSET` | `INDIRECT("B"&n)` | ✗ **reject — breaks the static dependency graph** (§8.4) |
+| Shape | Status |
+|---|---|
+| Relative / absolute / mixed | ✓ implemented |
+| Range, cross-sheet with quoted names | ✓ implemented |
+| Whole column / row (`A:A`, `1:1`) | ✓ implemented — clamped to the used range |
+| Defined names | ✓ implemented, read from `xl/workbook.xml`, self-reference guarded |
+| Intersection, union | ✓ implemented (originally slated for rejection) |
+| 3D refs, structured table refs, external links | ✗ refused with a reason |
+| `INDIRECT` / `OFFSET` | ✗ refused — they break the static dependency graph |
 
-### 7.8 Function-level semantics that bite
+Whole-column refs and defined names were "v2" in the original; both are cheap
+once the binder exists, and `SUM(A:A)` is common enough in generated models that
+refusing it would have been a visible gap.
 
-Even inside a small function set:
-- **`SUM` ignores text and booleans** in ranges but errors on a direct text
-  argument. Range vs scalar argument handling differs.
-- **`IF` is lazily evaluated** — the untaken branch must not be evaluated, or
-  `IF(A1=0,"",1/A1)` throws on the very case it's guarding.
-- **Criteria strings** (`SUMIF`/`COUNTIF`: `">100"`, `"<>x"`, wildcards `*` `?`
-  `~`) are a miniature expression language. When those functions are added,
-  they're a *parser* task, not a one-liner.
-- **`VLOOKUP` approximate match** (4th arg omitted/TRUE) requires sorted data and
-  returns the largest value ≤ lookup — the single most misimplemented Excel
-  behaviour. `MATCH` types `1`/`0`/`-1` likewise. Ship these with `FALSE`/exact
-  only in v1 and reject approximate match rather than guessing.
+### 7.8 ✓ Function-level semantics that bite
+
+- **`SUM` ignores text and booleans inside a range but coerces a direct
+  argument.** Encoded once in `collectNumbers` so every aggregate shares it,
+  rather than re-derived per function.
+- **`IF` is lazily evaluated** — as are `IFERROR`, `IFNA`, `IFS`, `CHOOSE`,
+  `SWITCH`. `IFERROR` is lazy for a second reason the original did not
+  anticipate: an *unsupported* fallback must not poison a cell whose primary
+  value computed cleanly.
+- **Criteria strings** (`">100"`, `"<>x"`, wildcards) are a miniature expression
+  language ✓ implemented once in `makeCriteria` and shared by the whole `*IF`
+  family.
+- **`VLOOKUP` approximate match** — the original said ship exact-only and reject
+  approximate. Built differently: the *sorted contract is implemented exactly*,
+  and **unsorted input is refused**. Approximate match is well-defined on sorted
+  data and common in real models (rate tables, grade bands), so refusing it
+  wholesale would have been a large gap; but on unsorted data Excel returns
+  whatever its binary search's probe order lands on, and reproducing an arbitrary
+  answer is failure mode #1. Refusing exactly the undefined case is strictly
+  better than refusing the whole function.
 
 ### 7.9 Shared and array formulas
 
-- **Shared formulas** — `<f t="shared" ref="B2:E2" si="0"/>` stores the formula
-  once; sibling cells reference `si` and must have refs **translated** by their
-  row/column offset. ✓ Neither sample uses them (`sharedOnly=0`), but Excel
-  itself emits them constantly, so any file a user drops in will have them.
-  ExcelJS surfaces `sharedFormula`; verify whether it translates refs or hands
-  back the master formula verbatim — **?** open, must be tested before trusting.
-- **Array formulas** (`t="array"`) and modern **dynamic arrays** with spill
-  ranges, `_xlfn.` prefixes, and `#SPILL!` — reject in v1, whole-file flag.
+- **Shared formulas** ✓ handled in `ooxml.ts` by translating the master AST by
+  each sibling's offset. This closes risk **R7** — rather than testing whether
+  ExcelJS translates them, the raw reader does the translation itself, so the
+  question no longer arises.
+- **Array formulas and dynamic arrays** ✗ refused. A saved file already contains
+  whatever the writer spilled, so refusing costs little; the masters are counted
+  in `facts.arrayFormulas`.
 
-### 7.10 Cycles
+### 7.10 ✓ Cycles
 
-Detect strongly-connected components (Tarjan) on the dependency graph. Default
-Excel behaviour is to refuse and warn; iterative calc is opt-in with
-`iterateCount=100`, `iterateDelta=0.0001` — ✓ exactly the values LO wrote into
-our own sample (§2.3). v1: detect, mark provenance `circular`, render `⚠`, count
-at file level. Do not silently iterate.
+Detected and marked `circular`; **never iterated**. Excel refuses them by default
+and iterative calc is opt-in, so a renderer that silently iterated would show
+numbers nobody asked for. Both true cycles and self-references are caught (§8).
 
-### 7.11 Volatile functions
+### 7.11 ✓ Volatile functions
 
-`NOW`, `TODAY`, `RAND`, `RANDBETWEEN`, `OFFSET`, `INDIRECT`, `CELL`, `INFO`.
-Two problems: they make our output differ from the file's cache for legitimate
-reasons (so §11's diff must exclude their descendants), and `OFFSET`/`INDIRECT`
-make dependencies dynamic, which a static graph cannot express. Policy: freeze
-`NOW`/`TODAY` at load time (one clock read, passed in — never read the clock
-mid-evaluation, so runs are reproducible); mark cells and their dependents
-`volatile`; reject `OFFSET`/`INDIRECT` entirely in the closed grammar.
+`NOW`/`TODAY`/`RAND`/`RANDBETWEEN` are implemented and marked `volatile`. The
+clock is read **once per evaluation run** and passed in, so a run is
+reproducible. One policy the original did not specify: when a volatile cell has a
+cached value, the preview shows the *file's* value. A preview should show what
+the generator produced; recomputing `NOW()` would make it disagree with the file
+for a reason that is not a finding. `OFFSET`/`INDIRECT` are refused outright.
 
 ---
 
-## 8. Dependency graph
+## 8. ✗ Dependency graph — the design was wrong here
 
-### 8.1 Representation
+### 8.1 What the original specified
 
-- Intern every address to an `i32` (`sheetIdx << 40 | row << 20 | col`). Maps
-  keyed by string are the obvious first-draft perf mistake.
-- **Forward edges** precedent → dependents (drives dirty propagation on edit).
-- **Reverse edges** dependent → precedents (drives evaluation and `trace()`).
-- Extract refs during parse — the AST already walks them; no second pass.
+Intern addresses to integers; keep **forward edges** (precedent → dependents) and
+**reverse edges**; Kahn topological sort; Tarjan for cycles. On range
+dependencies it said: expanding `B4:E4` to four cells is fine, `SUM(A:A)` would be
+a million edges so bound it to the used range, and block-bucketed range nodes are
+"**not** a v1 concern — note it and move on."
 
-### 8.2 Range dependencies
+### 8.2 Why that fails
 
-A formula reading `B4:E4` depends on 4 cells; naively expanding is fine here but
-`SUM(A:A)` is 1,048,576 edges. Bound whole-column refs to the sheet's used range,
-and if range-heavy models appear later, add block-bucketed range nodes (a range
-node depends on the 64×64 blocks it overlaps). **Not** a v1 concern — note it and
-move on. ✓ Current corpus: 11 small ranges.
+It is not whole-column references that break it. It is the **running total**, and
+every financial model has one:
 
-### 8.3 Evaluation order
+```
+D2 =SUM($B$1:B2)          2 edges
+D3 =SUM($B$1:B3)          3 edges
+…
+D5000 =SUM($B$1:B5000)    5000 edges
+```
 
-Kahn topological sort over reverse edges → evaluate once, in order, no recursion,
-no stack-depth risk. Tarjan SCC first to peel out cycles (§7.10). Alternative
-(lazy recursive memoised eval with in-progress marking) is simpler to write but
-risks deep recursion on long dependency chains — a 200-row model with
-row-to-row links is a 200-deep chain, and cross-sheet KPI cards make it worse.
-**Prefer explicit topo sort.**
+One edge per precedent *cell* is O(rows²). At 5,000 rows that is 12.5 million Set
+entries — hundreds of megabytes — and it took a 45,000-formula workbook from slow
+to **out of memory** ✓ observed. The used-range bound does nothing here: every one
+of those ranges is legitimately inside the used range.
 
-### 8.4 The dynamic-dependency escape hatch
+The mistake was treating range expansion as a *size* problem to be capped, when
+it is a *representation* problem. A range is one dependency, not N.
 
-`INDIRECT`/`OFFSET` create edges only knowable at evaluation time. Any engine
-claiming to support them needs either re-graphing after evaluation or
-conservative over-approximation. We reject them (§7.7) — which is exactly why
-rejecting at *parse* time matters: the graph stays a static, provable object.
+### 8.3 What was built
+
+**The graph is never materialised.** For each formula, the precedent
+*rectangles* are kept (`RefValue[]`, one per reference in the AST). Evaluation
+order comes from an **iterative depth-first search** that walks those rectangles
+lazily; its post-order is a topological order.
+
+- **Memory is O(formulas)**, not O(edges). The 45k workbook now completes.
+- **The walk allocates nothing per edge** — it advances a cursor
+  `{rectIndex, row, col}` inside a frame.
+- **Cycle detection falls out of the colouring**: grey-on-stack means a cycle,
+  and the members are exactly the frames from that node upward. Tarjan is not
+  needed for what the UI wants.
+
+The search is **iterative rather than recursive** for the reason the original
+gave for preferring a topological sort over lazy recursion in the first place —
+a row-to-row chain (`revenue_t = revenue_{t-1} * growth`) is as deep as the model
+is long, and 5,000 nested evaluations overflow the call stack. That reasoning was
+right; it just applies to the DFS too. There is now a 5,000-deep chain test.
+
+Time is still O(total precedent cells) — the running total genuinely reads 12.5 M
+cells — but that is inherent to the formula and costs ~1.1 s rather than failing.
+
+### 8.4 The dynamic-dependency escape hatch ✓ unchanged
+
+`INDIRECT`/`OFFSET` create edges knowable only at evaluation time, so they are
+refused at parse. That is exactly why refusing at *parse* time matters: the
+precedent rectangles stay a static, provable object.
 
 ---
 
 ## 9. Real time
 
-### 9.1 Off the main thread
+### 9.1 Measured, not budgeted
 
-Parse and evaluation move into a Web Worker. The overlay comes back as a
-structured-cloneable payload; if it ever gets big, flatten to parallel typed
-arrays (`Int32Array` addrs + `Float64Array` values + tag array) rather than a
-Map of objects.
+The original set targets; here are the numbers, by formula *shape* rather than by
+count, because shape is what determines cost (`perf.test.ts`):
 
-```
-main ──► { type:'load', buf: ArrayBuffer }              (transferable)
-     ◄── { type:'overlay', cells, stats, gaps }
-main ──► { type:'setValue',   addr, value }
-     ◄── { type:'patch', cells: CellPatch[] }           (only dirty cells)
-main ──► { type:'setFormula', addr, formula }           (streaming §9.3)
-     ◄── { type:'patch', … }
-main ──► { type:'trace', addr }
-     ◄── { type:'trace', precedents, dependents }
-```
+| Shape | Size | Evaluate | Original target |
+|---|---:|---:|---|
+| Local arithmetic — the normal case | 25,000 formulas | **~100 ms** | < 300 ms for 10k ✓ beaten |
+| Row-to-row chain, 5,000 deep | 5,000 formulas | ~10 ms | — |
+| Running total `SUM($A$1:A_n)` per row | 5,000 formulas | ~1.1 s | quadratic by construction |
+| Full-table `VLOOKUP` per row | 2,000 formulas | ~0.39 s | quadratic by construction |
+| Parse (ExcelJS + raw pass) | 3-sheet model | 39–89 ms | ~74 ms baseline ✓ held |
 
-Note the existing parse already needs `buf.slice(0)` because ExcelJS detaches the
-buffer — with a worker, transfer semantics make that explicit rather than
-incidental. (There's a scar from the PDF rasterizer on exactly this class of bug:
-buffer detachment that unit tests don't catch.)
+The bottom two are O(rows²) *cell reads* for any evaluator, Excel included. Two
+hot-path fixes came out of measuring them: aggregates read ranges directly
+instead of materialising a `Matrix` and allocating a wrapper object per cell, and
+`VLOOKUP` reads only its search column instead of copying the whole table on
+every call.
 
-### 9.2 Incremental recalculation
+### 9.2 ✗ Not built: worker, incremental recalc, streaming
 
-On `setValue(addr)`: BFS the forward edges to collect transitive dependents →
-that's the dirty set → re-evaluate in restricted topological order → return only
-changed cells. Add volatile nodes to every dirty set unconditionally.
+The original's §9 specified all three. None is built, and the honest reason
+differs per item:
 
-React should patch **only** touched cells. Re-rendering the whole `<table>` on
-each keystroke will dominate the cost and make a 2 ms recalc feel like 200 ms.
+- **Web Worker.** Not a wrapper. `ExcelView` reads the ExcelJS worksheet
+  directly for style, so moving parse and evaluation off-thread requires first
+  flattening the styled grid into a transferable snapshot — a real refactor with
+  fidelity-regression risk against the cell-by-cell match that is currently the
+  project's strongest evidence. At ~100 ms for a 25,000-formula model the
+  user-visible cost of not doing it is small; it becomes worth doing when a
+  pathological sheet blocks for a second or more.
+- **Incremental recalc.** The primitive exists (`tryEvaluate` runs a formula at a
+  position without storing it) and the rectangles support dirty-set propagation,
+  but nothing drives it because there is no edit surface.
+- **Streaming.** Free once incremental exists, as the original said. Still true,
+  still unbuilt.
 
-### 9.3 Streaming agent output
+### 9.3 ✓ Lazy loading
 
-If the generating agent emits cells incrementally, each arrival is
-`setFormula`/`setValue` + a dirty-set recalc. The renderer becomes a live view of
-model construction. Free, once §9.2 exists.
-
-### 9.4 Budgets (targets, to be validated)
-
-| Operation | Target | Reference |
-|---|---|---|
-| Parse (existing) | ~74 ms ✓ measured, 219 cells | today |
-| Full evaluate, ≤1k formulas | < 30 ms | ~13× current formula count |
-| Full evaluate, ≤10k formulas | < 300 ms | worker, so non-blocking anyway |
-| Single-cell edit ripple | < 5 ms | dirty set is typically tens of cells |
-| First paint regression | 0 ms | lazy-load, cached fast path |
-
-### 9.5 Lazy loading
-
-The engine module loads via dynamic `import()` **only** when the parse probe
-finds uncached formulas. Files with a complete cache — the common case for
-LO-recalc'd or Excel-saved files — pay nothing. This is the mitigation for a wasm
-engine's bundle weight, and it's why the detection step (§2.2) is worth having
-independently of the engine choice.
+Moot as built: the engine has no dependencies and adds no wasm, so there is no
+bundle weight to gate behind detection. The detection step (§2.2) was worth
+having on its own merits.
 
 ---
 
-## 10. The honesty layer
+## 10. The honesty layer ✓ built
 
 ### 10.1 Doctrine
 
-> **A cell we cannot compute renders `⚠`, never a number.**
-> Unsupported function, unsupported ref shape, uncertain coercion, cycle,
-> unsupported date system, unresolved external link → `unsupported` provenance,
-> counted at file level, reason recorded verbatim.
+> **A cell we cannot compute renders ⚠, never a number.**
+> Unsupported function, refused ref shape, cycle, unsupported feature, or an
+> uncomputable precedent → `unsupported` provenance, counted at file level,
+> reason recorded verbatim.
 
-Corollary from §7.6: genuine Excel errors are *computed values*, not failures.
-`#DIV/0!` renders as `#DIV/0!`.
+Corollary from §7.6: genuine Excel errors are *computed values*. `#DIV/0!`
+renders as `#DIV/0!`.
 
-### 10.2 UX surface
+One rule the original did not state and the build required:
+**uncomputable poisons downstream.** If a cell cannot be computed, every cell
+that reads it is marked too. Without this, a `SUM` over a range containing one ⚠
+cell would silently omit it and render a confident subtotal that is short one
+input — failure mode #1 arriving through the back door of an otherwise honest
+system. It is enforced at the read: `cellValue` throws while evaluating.
 
-The existing banner + per-cell `⚠` chassis is exactly right and changes meaning
-rather than shape — from *diagnosis* to *remedy*:
+### 10.2 UX surface ✓
 
-| Today | After |
+The banner changed meaning rather than shape, as designed:
+
+| Before | After |
 |---|---|
-| ⚠ **This file needs a recalc.** 75 formula cells have no cached result — they render blank | ✓ **Computed live in your browser.** 75/75 formulas · 0 unsupported · 4 ms |
-| — | ⚠ **73/75 computed.** 2 cells use `XLOOKUP`, which this engine doesn't support — shown as ⚠ |
+| ⚠ **This file needs a recalc.** 75 formula cells have no cached result | ✓ **Computed live in your browser.** 75 of 75 formulas · 0 unsupported · 1 ms |
 
-Additions:
-- Status chips: `computed 75` · `cached 0` · `unsupported 0` · `engine closed-v1`.
-- Cell hover: formula, computed value, cached value if present and different,
-  provenance, precedent list.
-- A three-way toggle **computed / cached / diff** (§11).
-- Click a cell → highlight precedents (`trace()`), the audit gesture people
-  actually want in a model.
+Plus: status chips (computed / from file / unsupported / circular / disagrees
+with file / parse ms / eval ms); a **Not computed** list aggregating gaps by
+function with a sample address; per-cell hover showing formula, provenance,
+computed value and the file's value when they differ; a computed/diff toggle;
+and click-to-trace precedent highlighting via `Workbook.precedents()`.
 
 ---
 
-## 11. The sleeper feature: recalc as audit
+## 11. Recalc as audit ✓ built, and extended
 
-### 11.1 Computed-vs-cached diff
+The original called this the sleeper feature and it was right — but it specified
+only half of it.
 
-Once both values exist for a cell, disagreement is a **finding**:
+**What it specified: the value diff.** A formula cell whose stored `<v>`
+disagrees with what the formula computes. Built, with volatile cells and
+within-epsilon differences excluded so it does not cry wolf.
 
-- The agent **hardcoded** a total instead of summing it (`<v>1827.6</v>` with no
-  `<f>` where siblings have formulas) — structural, detectable without evaluating.
-- The stated total **≠** the sum of its parts (cached `500`, computed `450`).
-- Stale cache: file edited by a tool that didn't recalc.
+**What it missed: on the case that matters most there is nothing to diff.** The
+original listed "the agent hardcoded a total instead of summing it" first among
+the findings and noted it was "structural, detectable without evaluating" — then
+built no mechanism for it. A hardcoded cell has *no formula*, so no value
+comparison can ever find it.
 
-For an agent-generated financial model this is arguably worth more than the
-rendering fix. "This model's numbers are internally consistent" is a claim
-nobody can currently make cheaply, and it's exactly the kind of check a reviewer
-of an LLM-produced model wants. It falls out of the overlay for free.
+`audit.ts` detects it from the **shape of the neighbourhood**: a literal number
+sitting where its row or column neighbours hold formulas. It infers what the cell
+would have held by translating a neighbour's formula to that position and
+evaluating it, so the finding is specific rather than a suspicion. It requires at
+least two neighbours sharing one shape — a single neighbouring formula is a
+pattern of one and would fire on every summary row. On the bundled sample:
 
-Exclusions to avoid crying wolf: volatile descendants (§7.11), and floats within
-the relative epsilon (§12.3).
+> `Revenue!E6` is typed in as **761.2**, but the rest of the row (B6, C6, D6)
+> uses `=SUM(E4:E5)`, which is **721.2**
 
-### 11.2 Trace / explain
+This is the characteristic failure of a generated model: the writer computed one
+figure in its head and typed it in. The number is plausible, in the right place,
+formatted like its neighbours. Nothing about the rendered sheet reveals it.
 
-With a dependency graph, "explain this number" is a graph walk:
-`Net income ← Pretax − Tax ← EBIT − Interest ← Gross profit − Opex ← …`.
-Render it as a chain. This is the same capability Excel's Trace Precedents
-gives, and it's the natural pairing with an agent that *wrote* the model:
-the agent's rationale and the graph's actual structure can be compared.
+**Trace** (`Workbook.precedents()`) is built as the one-hop version — click a
+cell, its precedents highlight. The multi-hop chain narrative the original
+sketched is not built.
 
 ---
 
-## 12. Eval harness — build this first
-
-We already own a ground-truth oracle and it was sitting in `public/` the whole
-time: **the same model twice**, pre- and post-LibreOffice-recalc.
+## 12. The oracle ✓ built — and it earned its keep
 
 ### 12.1 The loop
 
 ```
-financial-model-nocache.xlsx ──► engine ──► ValueOverlay
-                                                │
-financial-model.xlsx (LO-recalc'd) ──► expected values
-                                                │
-                                          per-cell diff ──► score + buckets
+suites.py ──► build/<suite>.xlsx ──► soffice --headless ──► expected.json
+     │                                                            │
+     └──────► spec.json ──► the engine builds the same workbook ──┘
+                                          │
+                                    per-probe diff ──► buckets
 ```
 
-### 12.2 Metrics
+Both sides are driven from one spec, so a disagreement is a semantic difference
+rather than a setup difference.
 
-| Metric | Definition | v1 gate |
-|---|---|---|
-| **Coverage** | cells the engine *attempted* / formula cells | 100% (closed grammar) |
-| **Accuracy** | cells matching the oracle / attempted | 100% |
-| **Unsupported** | count + `{function, shape}` buckets | 0 on our corpus |
-| **False-confidence** | computed ≠ oracle **and** not flagged | **0 — hard gate, non-negotiable** |
-| Latency | full evaluate, ms | §9.4 |
-| Bundle | added KB gzip | measured, lazy-loaded |
+### 12.2 Buckets and the gate
 
-False-confidence is the metric that matters. The others describe capability; that
-one describes trustworthiness, and failure mode #1 is precisely a nonzero value here.
+| Bucket | Meaning |
+|---|---|
+| match | the two agree |
+| unsupported | we refused, and said why — acceptable, tracked |
+| divergence | they disagree and we deliberately follow Excel — declared |
+| **MISMATCH** | they disagree and we did not know — **hard gate at zero** |
 
-### 12.3 Tolerance policy
+Current: **399 probes, 13 suites, coverage 100 %, accuracy 100 %, false
+confidence 0**, with 29 declared divergences.
 
-- Numbers: `|a−b| <= 1e-9 * max(1,|a|,|b|)` — relative, never `===` (✓ §2.4).
-- Strings, booleans, errors: exact.
-- Empty: `""` (`t="str"`) and never-computed are **distinct** outcomes (✓ §2.2)
-  and must not be conflated by the comparator — the comparator is itself the
-  first place that bug would hide.
+The original proposed coverage 100 % / accuracy 100 % / false-confidence 0 as v1
+gates against a closed grammar. Only the third is a real gate — the first two
+describe capability against *this corpus* and would drop the moment a suite
+widens. False confidence is the one that describes trustworthiness.
 
-### 12.4 Widening the corpus
+### 12.3 ✓ Tolerance policy, unchanged
 
-1. Parametrise `gen_model.py` to emit variants (more sheets, deeper chains,
-   shared formulas, whole-column refs, dates, lookups, cycles).
-2. Add **real** agent-generated workbooks — the vocabulary histogram of §2.1 is
-   n=1 and must not be frozen on that basis.
-3. Recalc each with LO → `(input, expected)` pairs, committed as fixtures.
-4. `npm run eval` prints the markdown table; CI gates on the two 100%s and the
-   zero.
+Relative epsilon `1e-9` for numbers; exact for strings, booleans and errors.
+Blank and `""` are distinct outcomes and the comparator must not conflate them —
+"the comparator is itself the first place that bug would hide" was a good call.
+(One limit found in practice: openpyxl cannot distinguish a formula that produced
+`""` from one that produced nothing, so on the oracle side both satisfy a blank
+expectation. The engine still distinguishes them internally.)
 
-### 12.5 The oracle's own limits
+### 12.4 Fixture hazards worth knowing
 
-LibreOffice is not Excel. On financial functions, edge-case rounding, and newer
-functions they diverge. Mitigations: keep a small **hand-verified-in-Excel**
-fixture set for anything financial (`IRR`, `XIRR`, `NPV`, `PMT`), and record
-known LO↔Excel divergences as documented expectations rather than silent
-failures. Also worth noting: the oracle is a **transform of the input** — if
-`gen_model.py` never emits shared formulas, LO's output can't teach us about them.
-Corpus breadth is the binding constraint on the oracle's value, not tolerance.
+- **openpyxl writes formula text verbatim**, so post-2007 functions need the
+  `_xlfn.` namespace or LibreOffice returns `#NAME?` — which looks exactly like a
+  divergence and is really a fixture bug. `generate.py` adds it.
+- LibreOffice applies a date or time *format* to `DATE()`/`TIME()` results, so
+  openpyxl hands them back as datetimes; they are converted back to serials
+  before comparison.
+
+### 12.5 ✗ LibreOffice is not Excel — and the gap is not where we expected
+
+The original anticipated divergence on "financial functions, edge-case rounding,
+and newer functions", and recommended hand-verified Excel fixtures for `IRR`,
+`XIRR`, `NPV`, `PMT`.
+
+The financial functions were almost entirely **fine**. The largest divergence
+class is **booleans**: LibreOffice treats them as plain numbers, so `TRUE=1` is
+TRUE, `SUM` over a range containing TRUE includes it, `COUNT` counts it, and
+`TRUE&""` is `"1"`. Excel gives booleans their own type, ranking above text and
+above every number. Following the oracle here would have shipped
+Excel-incompatible arithmetic into every model that uses a boolean anywhere.
+
+The other declared classes: LibreOffice has no phantom 1900-02-29, so every date
+before 1900-03-01 sits one day off Excel's serials; `DATE(26,1,1)` is 1926 by
+Microsoft's documented "add 1900" rule, not 2026; `SQRT(-1)` and `LN(0)` are
+`#NUM!` in Excel and `#VALUE!` in LibreOffice; LibreOffice pads scientific
+exponents to three digits.
+
+`divergences.json` records each with its reason, and the gate is symmetric: a
+declared divergence that starts **matching** also fails, because that means
+either LibreOffice changed or we drifted onto its side of the argument.
+
+The deeper lesson is about oracles generally: an oracle is a *second opinion*,
+not ground truth. The value came from the disagreements, and every one of them
+had to be adjudicated by hand against Excel's documented behaviour.
+
+### 12.6 ? Corpus breadth is the binding constraint
+
+Unchanged from the original, and still the weakest evidence here: 399 synthetic
+probes plus four sample workbooks. The oracle is a transform of the input, so it
+can only teach us about shapes we thought to write down. Widening it with **real
+agent output** is the highest-value next step (§16).
 
 ---
 
 ## 13. Fallbacks and write-back
 
-### 13.1 The ladder
+### 13.1 The ladder ✓ as designed
 
-| Tier | Path | When | Cost |
+| Tier | Path | When | Status |
 |---|---|---|---|
-| 0 | Trust `<v>` | Cache present (Excel/LO-saved files) | 0 |
-| 1 | **Closed-grammar engine (ours)** | Our agent's output — every formula in-grammar | ~ms, no bundle |
-| 2 | **`formualizer` wasm** | Open-vocabulary files, if the bake-off clears | ~ms, lazy KB |
-| 3 | LibreOffice headless recalc | Tier 1+2 report unsupported cells; user opts in | server + upload |
-| 4 | Honest blank + ⚠ | Everything else | 0 |
+| 0 | Trust `<v>` | Cache present | ✓ |
+| 1 | **This engine** | Everything it covers | ✓ built |
+| 2 | An adopted wasm engine | Open-vocabulary files | not adopted (§0) |
+| 3 | LibreOffice headless | Tier 1 reports unsupported cells; user opts in | available, not wired into the app |
+| 4 | Honest blank + ⚠ | Everything else | ✓ |
 
-Tier 3 is the existing, proven capability and the eval oracle. Keep it — but it's
-now an explicit, user-consented escalation ("compute this on the server?"), not
-the default path, which preserves the no-egress property for tiers 0–2.
+Tier 3 is deliberately an *escalation*, not the default, which preserves the
+no-egress property for everything else.
 
-### 13.2 Write-back: "Save recalculated .xlsx"
+### 13.2 Write-back — not built, and correctly gated
 
-Inject computed values as `<v>` (with correct `t`), so downstream consumers see
-numbers. Details that matter: set `t="str"` for string results and `t="n"` for
-numeric (✓ the distinction §2.2 depends on); **omit `calcChain.xml`** and strip
-it if present (✓ §2.5 — neither sample has one; a stale one makes Excel
-complain); keep `fullCalcOnLoad="1"` (✓ §2.3) so Excel still recomputes from the
-formulas and our cache is only a convenience for non-Excel readers; never write
-back cells with provenance `unsupported` or `circular`.
+Injecting computed values as `<v>` so downstream consumers see numbers is
+designed and unbuilt. The details still hold: set `t="str"` for string results
+and `t="n"` for numeric; **omit `calcChain.xml`** and strip a stale one; keep
+`fullCalcOnLoad="1"` so Excel recomputes anyway; never write back a cell whose
+provenance is `unsupported` or `circular`.
 
-Note the asymmetry this creates and accept it deliberately: our `<v>` is *our*
-computation. If it disagrees with Excel, we've now written our disagreement into
-the file. That's an argument for gating write-back on a green eval score, and for
-stamping provenance somewhere in the file (a custom property or a doc-info note).
+And the reason to be careful stands: our `<v>` is *our* computation. If it
+disagrees with Excel we have written our disagreement into the file permanently.
+Gate it on a green oracle score and stamp provenance somewhere in the file.
 
-### 13.3 Generator-side
+### 13.3 Generator-side ✓ still the right move
 
-- Assert `<calcPr fullCalcOnLoad="1"/>` if the agent hand-writes OOXML (openpyxl
-  already does it ✓ §2.3).
-- Publish the closed grammar into the generation prompt as an allowlist (§5.1),
-  and CI-assert every generated formula parses under it.
-- Prefer formulas over hardcoded values in generation — with a working evaluator,
-  formulas are now *strictly better* (they render, and they're auditable via
-  §11), which removes the incentive to hardcode.
+`CAPABILITY.md` is generated from the registry and can be published into the
+generation prompt as an allowlist, so the renderer never meets a formula it
+cannot compute *by construction*. This is the original §5.1 idea, intact — only
+the floor is wider, and the list is derived rather than hand-written.
 
 ---
 
-## 14. Phased plan
+## 14. Phase status
 
-Each phase is independently shippable and independently useful.
-
-| P | Deliverable | Acceptance | Est. |
-|---|---|---|---|
-| **0** | **Eval harness + raw `t` probe.** Oracle diff runner, fixture pairs, markdown report. Retire `RECALCD_THRESHOLD` in favour of exact per-cell truth (§2.2) | Harness scores an engine end-to-end; `NullEngine` baseline = 0% computed / 0 false-confidence. `parse.ts` reports exact uncached counts with no heuristic | ~½ day |
-| **1** | **Vocabulary histogram** across real agent output (§12.4) | Function/shape histogram over ≥10 real workbooks → the closed grammar is frozen against data, not against n=1 | ~½ day |
-| **2** | **`formualizer` bake-off** — `fromXlsxBytes` → `evaluateAll` → `readRange`, scored by P0 | A number: accuracy, coverage, latency, added KB gzip. Decision recorded either way | ~½ day |
-| **3** | **Closed-grammar engine v1** — lexer, Pratt parser, refs, coercion (§7.2, §7.3), `SUM`/`IF`/arithmetic, graph + topo eval | 100% coverage & accuracy on the corpus, **0 false-confidence**, `-2^2=4` and empty-cell tests green | ~3–5 days |
-| **4** | **Overlay + provenance UI** — badges, chips, hover, banner rewrite (§10.2) | Nocache sample renders identically to the recalc'd sample, labelled "computed live" | ~1 day |
-| **5** | **Worker + incremental + live edit** (§9) | Edit an assumption → dependent cells update < 5 ms; UI never blocks | ~2 days |
-| **6** | **Audit diff mode** (§11) | A deliberately hardcoded-total fixture is flagged | ~1 day |
-| **7** | **Write-back** (§13.2), gated on green eval | Round-trip: our output opens in Excel with correct values and no repair prompt | ~1 day |
-
-P0–P2 are ~1.5 days and **de-risk everything after**: they tell us whether P3 is
-even necessary, and they're the regression gate if it is. Do not start P3 before
-P2 reports a number.
-
----
-
-## 15. Risks
-
-| # | Risk | Mitigation |
+| P | Deliverable | Status |
 |---|---|---|
-| **R1** | **Silent wrong numbers** (failure mode #1) | Fail-loud doctrine §10; closed grammar rejects at parse; false-confidence is a hard CI gate §12.2 |
-| R2 | Single-maintainer wasm deps (`formualizer`, `@ironcalc/wasm` ✓) | MIT + Rust → vendorable/forkable. Engine behind an interface; tiers 1/3 survive its abandonment |
-| R3 | Wasm bundle weight vs 360 KB baseline | Lazy `import()` gated on detection §9.5; measured in P2 before adoption |
-| R4 | Closed grammar frozen on n=1 (§2.1) | P1 histogram over real output before freezing |
-| R5 | LO oracle ≠ Excel (§12.5) | Hand-verified Excel fixtures for financial fns; divergences documented, not silent |
-| R6 | **Scope creep into "we built a spreadsheet app"** | Explicit line: **view + what-if, not authoring.** No formula bar, no formatting UI, no save-in-place. Editing exists to drive recalc, not to replace Excel |
-| R7 | ExcelJS may not translate shared-formula refs (§7.9 **?**) | Test explicitly in P1; if it hands back the master formula verbatim, we translate offsets ourselves — or fall to tier 2/3 for such files |
-| R8 | Write-back propagates *our* arithmetic into files (§13.2) | Gate on green eval; stamp provenance; keep `fullCalcOnLoad` so Excel recomputes anyway |
+| **0** | Eval harness + raw `t` probe; retire the 0.25 heuristic | ✓ done |
+| **1** | Vocabulary histogram across real agent output | ✗ **not done** — superseded by §2.1, but the underlying need (a real corpus) is now §16's top item |
+| **2** | `formualizer` bake-off | ✗ not run — decided on other grounds (§0) |
+| **3** | Evaluator | ✓ done, broad rather than closed: 197 functions |
+| **4** | Overlay + provenance UI | ✓ done |
+| **5** | Worker + incremental + live edit | ✗ not done (§9.2) |
+| **6** | Audit diff | ✓ done, and extended with the structural detector (§11) |
+| **7** | Write-back | ✗ not done (§13.2) |
+
+---
+
+## 15. Risks, and what became of them
+
+| # | Risk | Outcome |
+|---|---|---|
+| **R1** | **Silent wrong numbers** | Contained. Fail-loud throughout; false confidence is a hard gate at zero across 399 probes. Not *eliminated* — the corpus is synthetic (R10) |
+| R2 | Single-maintainer wasm deps | Avoided entirely — nothing adopted |
+| R3 | Wasm bundle weight | Moot — the engine is dependency-free |
+| **R4** | **Closed grammar frozen on n=1** | **Materialised.** Caught before shipping, but only by checking the generator path. See §2.1 |
+| R5 | LO oracle ≠ Excel | Materialised, differently than predicted (§12.5). Managed by a declared-divergence registry with a symmetric gate |
+| R6 | Scope creep into "we built a spreadsheet app" | Held. View + audit, no authoring: no formula bar, no formatting UI, no save-in-place |
+| R7 | ExcelJS may not translate shared formulas | Dissolved — the raw reader translates them itself (§7.9) |
+| R8 | Write-back propagates our arithmetic into files | Not incurred; write-back unbuilt |
+| **R9** | **New: O(n²) graph memory** | Materialised as an OOM at 45k formulas. Fixed by not materialising the graph (§8) |
+| **R10** | **New: the corpus is synthetic** | Open. The gates are real, but they measure agreement on probes we wrote |
 
 ---
 
 ## 16. Open questions
 
-1. **Which surface consumes this?** The spike is standalone. Does the calc layer
-   land in a product preview path, or stay a library? Changes how much the
-   what-if editing (§9.2) matters versus pure on-load rendering.
-2. **Is view-only still the contract?** §9.2 is where the value is, and it is
-   also the door to R6. Worth an explicit decision before P5.
-3. **Excel-parity bar** — is LibreOffice good enough as truth (§12.5), or does
-   some class of numbers need Excel-verified fixtures from the start?
-4. **Wasm in the bundle: acceptable?** If a hard no, tier 2 becomes
-   LibreOffice-only and the closed grammar carries more weight (widen it faster).
-5. **Does the generator hand-write OOXML or use openpyxl?** Determines whether
-   §13.3's `fullCalcOnLoad` assertion is needed at all (openpyxl already ✓).
+1. **? Widen the corpus with real agent output.** The single highest-value next
+   step. Every correctness claim here is conditional on a corpus we invented.
+   Phase 1 was cut for the wrong reason — the closed grammar it was meant to
+   freeze turned out not to exist — but the need for real data did not go away
+   with it.
+2. **? Which surface consumes this.** Still open. The packaging hedges: the
+   engine is framework-free, the renderer is a React component, the demo is
+   separable. If it lands in the product's Excel preview slot, the worker
+   question (§9.2) gets sharper.
+3. **? Is view-only still the contract.** Unresolved, and now cheap to resolve:
+   the primitives for what-if exist, so this is a product decision rather than an
+   engineering one.
+4. **✓ Excel-parity bar.** Answered by the build: LibreOffice is good enough as a
+   *second opinion*, provided every disagreement is adjudicated by hand and
+   recorded. It is not good enough as ground truth.
+5. **✓ Wasm in the bundle.** Answered: none, and none needed.
+6. **✓ Does the generator hand-write OOXML or use openpyxl.** openpyxl, free-hand
+   via `python_execute` — which is what invalidated §2.1.
 
 ---
 
-## Appendix A — closed grammar v1 (the declared floor)
+## Appendix A — the capability floor
 
-Everything outside this is **rejected at parse time** with a reason string, and
-renders `⚠`. Widening is a deliberate, oracle-tested act (§5.1).
+Superseded by **`CAPABILITY.md`**, generated from the function registry by
+`capability.test.ts` and asserted on every test run. A hand-maintained list of
+what an engine supports drifts within a week and then actively misleads — which,
+for a fail-loud engine, is the one thing the documentation must not do.
 
-```ebnf
-formula     = expr ;
-expr        = compare ;
-compare     = concat { ("=" | "<>" | "<" | ">" | "<=" | ">=") concat } ;
-concat      = addsub { "&" addsub } ;
-addsub      = muldiv { ("+" | "-") muldiv } ;
-muldiv      = power { ("*" | "/") power } ;
-power       = postfix { "^" postfix } ;              (* LEFT-assoc — §7.1 *)
-postfix     = unary [ "%" ] ;
-unary       = [ "-" | "+" ] primary ;                (* binds tighter than ^ — §7.1 *)
-primary     = number | string | bool | error
-            | reference | funcall | "(" expr ")" ;
+Summary at time of writing: **197 implemented, 26 refused by name**, plus two
+conditional refusals (`SUBTOTAL(101–111)`, and approximate-match lookups over
+unsorted data).
 
-reference   = [ sheet "!" ] cellref [ ":" cellref ] ;
-sheet       = ident | "'" any-but-quote "'" ;        (* quoting mandatory w/ spaces *)
-cellref     = [ "$" ] col [ "$" ] row ;
-
-funcall     = fname "(" [ arglist ] ")" ;
-arglist     = expr { "," expr } ;
-fname       = "SUM" | "IF" ;                         (* v1 — the measured set, §2.1 *)
-```
-
-**v1 semantics required:** empty-cell = 0 and = `""` (§7.3) · arithmetic coerces
-numeric text, comparison does not (§7.2) · `IF` lazy in the untaken branch
-(§7.8) · `SUM` skips text/booleans in ranges (§7.8) · errors propagate, are
-values not failures (§7.6) · unary-minus/`^` precedence and `^` left-assoc (§7.1).
-
-**Explicitly rejected in v1:** `INDIRECT`, `OFFSET`, whole-column refs, defined
-names, 3D refs, structured table refs, intersection/union operators, array &
-dynamic-array formulas, shared formulas we can't translate, the 1904 date system,
-external links, iterative calculation of cycles.
-
-**v2 candidates, in the order the histogram will probably demand them:**
-`IFERROR`, `ROUND`, `AVERAGE`, `MIN`, `MAX`, `ABS`, `SUMIF(S)`, `COUNTIF(S)`,
-`INDEX`/`MATCH` (exact only), `NPV`, `IRR`, `PMT`, `POWER`, `EOMONTH`, `DATE`,
-`YEAR`, `TEXT`, whole-column refs, defined names.
+The original's Appendix A specified a `{SUM, IF}` EBNF grammar with everything
+else rejected at parse. The *grammar* is still there in `parser.ts` — Excel's
+full expression syntax, with unsupported shapes rejected at parse rather than at
+eval, exactly as intended. What changed is only the function set it admits.
 
 ---
 
-## Appendix B — raw evidence (all ✓, 2026-07-25)
+## Appendix B — evidence
 
-**Uncached vs cached, same cell, same model:**
+**Uncached vs cached, same cell, same model** ✓:
 ```xml
 nocache : <c r="B7" s="19"><f>B6/B4</f><v></v></c>
 recalc'd: <c r="B7" s="19" t="n"><f aca="false">B6/B4</f><v>0.59004854368932</v></c>
 ```
 
-**Legitimately-empty vs never-computed (the `t` attribute — §2.2):**
+**Legitimately-empty vs never-computed — the `t` attribute** ✓:
 ```xml
 recalc'd: <c r="G9" t="str"><f>IF(G9=0,"",F9/G9-1)</f><v></v></c>   ← computed to ""
 nocache : <c r="F4"><f>SUM(B4:E4)</f><v></v></c>                     ← never computed
 ```
 
-**`calcPr`:**
+**`calcPr`** ✓:
 ```xml
 nocache (openpyxl): <calcPr calcId="124519" fullCalcOnLoad="1"/>
 recalc'd (LO):      <calcPr iterateCount="100" refMode="A1" iterate="false" iterateDelta="0.0001"/>
 ```
 
-**Vocabulary histogram:** `financial-model.xlsx` — 76 formulas, 5 uncached
-(legit-empty), 0 shared-only, 19 cross-sheet cells; functions `IF`×12, `SUM`×11;
-shapes arithmetic ×57, cross-sheet ×19, string literal ×12, range ×11,
-absolute ×11.
+**Original vocabulary probe** ✓ *(accurate about the sample, wrong as a basis for
+freezing a grammar — §2.1)*: 76 formulas, 5 uncached, 0 shared-only, 19
+cross-sheet; functions `IF`×12, `SUM`×11.
 
-**`calcChain.xml`:** absent from both files.
+**Oracle, after the build** ✓:
+```
+399 probes · 13 suites · coverage 100.0% · accuracy 100.0% · false confidence 0
+29 declared LibreOffice-vs-Excel divergences (tools/oracle/divergences.json)
+largest class: booleans — LO treats them as numbers, Excel does not
+```
 
-**Renderer baseline (Chrome):** 12.4 KB, 3 sheets, 219 cells, 76 formulas,
-parse 74 ms, 0 console errors; nocache → 75/75 uncached, banner fires.
+**Browser end-to-end** ✓ (`tools/verify/drive.mjs`, headless Chrome):
+```
+Financial model (recalculated)   76 of 76 formulas · 0 unsupported · 1 ms
+Same model, no cached values     75 of 75 formulas · 0 unsupported · 1 ms
+all 232 rendered cells match between the cached and the computed file
+the hardcoded total is flagged: Revenue!E6 typed in as 761.2; SUM(E4:E5) is 721.2
+console errors: 0
+```
 
-**npm registry, 2026-07-25:** `formualizer@0.7.1` MIT OR Apache-2.0 ·
+**Performance by shape** ✓ (`perf.test.ts`):
+```
+local arithmetic    25000 formulas   ~100 ms
+running total        5000 formulas   ~1.1 s    (12.5M cell reads, quadratic by construction)
+full-table VLOOKUP   2000 formulas   ~0.39 s   (4M comparisons)
+5000-deep chain      5000 formulas   ~10 ms    (guards against call-stack recursion)
+```
+
+**The graph failure that changed §8** ✓: with one edge materialised per precedent
+cell, a 45,000-formula workbook containing a running-total column exhausted
+memory and killed the test worker. Without materialising it: completes.
+
+**npm registry, 2026-07-25** ✓: `formualizer@0.7.1` MIT OR Apache-2.0 ·
 `@ironcalc/wasm@0.7.0` MIT/Apache-2.0 · `hyperformula@3.3.0` GPL-3.0-only ·
-`@formulajs/formulajs@4.6.0` MIT · `fast-formula-parser@1.0.19` MIT
-(last publish ≈6 y ago).
+`@formulajs/formulajs@4.6.0` MIT · `fast-formula-parser@1.0.19` MIT (last publish
+≈6 y ago).
 
 ---
 
 ## Appendix C — sources
 
 - HyperFormula licensing — https://hyperformula.handsontable.com/docs/guide/licensing.html
-- Formualizer — https://github.com/psu3d0/formualizer · wasm bindings: https://github.com/PSU3D0/formualizer/blob/main/bindings/wasm/README.md · https://www.formualizer.dev/
+- Formualizer — https://github.com/psu3d0/formualizer · https://www.formualizer.dev/
 - IronCalc — https://github.com/ironcalc/IronCalc · https://nlnet.nl/project/IronCalc/
 - Formula.js — https://www.npmjs.com/package/@formulajs/formulajs
 - fast-formula-parser — https://github.com/LesterLyu/fast-formula-parser
-- Subject repo: `/Users/vz/OSS excel render tests` — `SPIKE_FINDINGS.md`, `LEARNINGS.md`, `src/excel/{parse,format,theme}.ts`, `ExcelView.tsx`
+- Predecessor spike: `/Users/vz/OSS excel render tests` — `SPIKE_FINDINGS.md`,
+  `LEARNINGS.md`, and the `src/excel/` renderer this project's view descends from
+- Generator path that invalidated §2.1:
+  `financial-analyst-agent/apps/api/src/tools/excel-export.ts:70`
