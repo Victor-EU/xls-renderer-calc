@@ -1,13 +1,94 @@
 # Recalculate & render — the calculation layer for the client-side Excel renderer
 
 **Design date:** 2026-07-25 · **Built:** 2026-07-25 (commit `2e5822d`)
-**Status: BUILT.** This document describes the system as it exists and why it is
-shaped that way. `README.md` covers what it does and how to run it;
-`CAPABILITY.md` (generated) lists exactly what it computes.
+**Status: BUILT.** This document states what the system is for, describes it as
+it exists, and says why it is shaped that way. `README.md` covers what it does
+and how to run it; `CAPABILITY.md` (generated) lists exactly what it computes.
 
 Marker convention: **✓** = verified against real files or measured ·
 **✗** = the original design was wrong here, corrected with the reason ·
 **?** = still open.
+
+---
+
+## Scope and the job to be done
+
+### The brief, verbatim
+
+This is the requirement of record. Everything below is accountable to it.
+
+> *"my goal: when i have an ai agent, the agent generates xls, i need a web app
+> renderer of excel to the user for review, no need of editing, but the value has
+> to be calculated. the agent emits xml with formula, the formula doesn't render
+> the value without a calculator. we want to build on what existed
+> `http://localhost:5176/`, `/Users/vz/OSS excel render tests`, it has to be light
+> weight browser based, we don't want heavy .net server end. we can write the
+> calculator from zero. there is no constraint of effort. license has to be the
+> most permissive. bottomline, it has to work for the users to preview the excel
+> sheet that's generated."*
+
+### The job
+
+> A user asked an agent for a financial model. The agent produced an `.xlsx`. The
+> user needs to **look at it and decide whether it is right** — before
+> downloading it, before opening Excel, without leaving the app, and without the
+> file leaving their machine.
+
+Everything the product needs from this artefact is *review*: read the numbers,
+check they are sane, spot what is wrong, then either accept it or go back to the
+agent. Editing belongs in Excel and the user will do it there. That is why
+"no need of editing" is a scope decision rather than a deferral (R6), and why the
+audit features (§11) count as core rather than as extras — they serve the actual
+job, which is judging a model, not viewing a grid.
+
+### In scope · out of scope
+
+| In scope | Out of scope |
+|---|---|
+| Rendering a generated `.xlsx` faithfully in the browser | Editing, authoring, saving in place |
+| **Computing the values the file does not carry** | Competing with Excel on features |
+| Saying clearly what could *not* be computed | Server-side rendering as the default path |
+| Surfacing numbers the model states but its formulas do not support (§11) | Charts drawn in-sheet — nothing here renders them, and the tier-3 fallback (§13.1) recalculates values, it does not draw |
+| Being embeddable in a product surface | Being a spreadsheet application |
+
+### What each constraint decided
+
+The brief is short, and nearly every clause in it settled something. Tracing them
+is the quickest way to check the design is answering the question that was asked:
+
+| Constraint from the brief | What it decided |
+|---|---|
+| *"the agent emits xml with formula, the formula doesn't render the value without a calculator"* | The problem statement itself — §1. This is the whole reason the project exists |
+| *"for review … no need of editing"* | View-only is the contract, not a phase. Guarded as **R6**; incremental recalc and a what-if surface are consequently *unbuilt*, not late (§9.2) |
+| *"but the value has to be calculated"* | The calculation layer. And, by implication, the fail-loud doctrine (§3, §10): if a preview exists to be trusted, "calculated" has to mean *correct, or openly admitted* — a plausible wrong number would defeat the purpose more thoroughly than the blank cell it replaced |
+| *"a web app renderer … light weight browser based, we don't want heavy .net server end"* | No server on the default path at all — not a lighter one. The engine has **zero dependencies**, no wasm, and nothing is uploaded. LibreOffice survives only as a user-consented escalation (§13.1, tier 3) |
+| *"build on what existed `:5176`, `/Users/vz/OSS excel render tests`"* | The spike's renderer is kept and ported rather than rewritten (§6.1, §6.3): its style fidelity was already validated cell by cell against a real model. Its two sample files remain the project's oldest ground truth, and the headline check (§2.6) is still measured against them |
+| *"we can write the calculator from zero"* | Explicit authorisation for §0. It removed "but could we just adopt something" as a live question and let the decision turn on the properties we needed |
+| *"there is no constraint of effort"* | Why the oracle exists at all. A 399-probe differential harness against LibreOffice is not the cheap path to a working preview; it is the path to one whose numbers can be *defended*. Same reason the library is 197 functions rather than the two the sample contained |
+| *"license has to be the most permissive"* | MIT/Apache-2.0 only. It disqualified HyperFormula — the most mature option — on licence rather than on quality (§4), and every shipped dependency is MIT |
+| *"bottomline, it has to work for the users to preview the excel sheet that's generated"* | Turned into an executable acceptance test rather than left as a sentiment. See below |
+
+### The bottom line, made testable
+
+"It has to work" is only a commitment if something fails when it does not. The
+brief's bottom line is therefore encoded as the project's headline check
+(`tools/verify/drive.mjs`, run against a real browser):
+
+> Load the same model twice — once with LibreOffice's cached values, once with
+> **no cached values at all** — and every rendered cell must match.
+
+It does, across all 232 cells ✓. That single assertion covers the brief end to
+end: the file the agent actually produces renders exactly as the
+server-recalculated one, in the browser, with nothing uploaded.
+
+Two honest qualifications on it. It is *one* model, so §12's oracle carries the
+generality (and §16.1 is the standing caveat that even that corpus is synthetic).
+And *"no constraint of effort"* did not mean everything got built — it meant
+effort was never the reason anything was cut. What is unbuilt was cut for
+risk (the worker, §9.2, which would put the verified render fidelity at stake) or
+because nothing needs it yet (write-back, §13.2), and each says so where it sits.
+
+---
 
 > **Read this first if you knew the earlier draft.** Three of its load-bearing
 > decisions did not survive contact with the build, and each is corrected in

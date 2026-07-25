@@ -3,6 +3,12 @@
 A client-side, view-only `.xlsx` preview that **computes formula values in the
 browser**. No server, nothing uploaded, MIT throughout.
 
+**The job:** a user asked an agent for a financial model, the agent produced an
+`.xlsx`, and the user needs to look at it and decide whether it is right —
+without downloading it, without opening Excel, and without the file leaving their
+machine. Review, not editing; editing belongs in Excel.
+([Full scope in `DESIGN.md`.](./DESIGN.md#scope-and-the-job-to-be-done))
+
 The problem it exists for: an agent writing a workbook emits formulas with an
 empty value cache —
 
