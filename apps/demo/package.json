@@ -1,0 +1,17 @@
+{
+  "name": "@xlscalc/demo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5176 --strictPort",
+    "build": "vite build",
+    "preview": "vite preview --port 5176 --strictPort"
+  },
+  "dependencies": {
+    "@xlscalc/formula-engine": "0.1.0",
+    "@xlscalc/xlsx-preview": "0.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}

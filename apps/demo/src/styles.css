@@ -1,0 +1,301 @@
+:root {
+  --ink: #17202e;
+  --muted: #64748b;
+  --line: #dde3ec;
+  --paper: #ffffff;
+  --bg: #f4f6fa;
+  --good: #2f7d4f;
+  --bad: #c0392b;
+  --warn: #a16207;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.app {
+  padding: 14px 18px 40px;
+}
+
+.top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.title strong {
+  font-size: 15px;
+}
+
+.title .sub {
+  color: var(--muted);
+  margin-left: 10px;
+}
+
+.samples {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.samples button,
+.filebtn {
+  border: 1px solid var(--line);
+  background: var(--paper);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.samples button:hover,
+.filebtn:hover {
+  border-color: #9db2d4;
+}
+
+.filebtn input {
+  display: none;
+}
+
+.banner {
+  border: 1px solid var(--line);
+  background: var(--paper);
+  border-radius: 8px;
+  padding: 9px 12px;
+  margin-bottom: 8px;
+}
+
+.banner.good {
+  border-color: #b7dcc4;
+  background: #f2fbf5;
+}
+
+.banner.warn {
+  border-color: #e6d3a3;
+  background: #fdf9ef;
+}
+
+.banner.bad {
+  border-color: #e6b7b0;
+  background: #fdf3f2;
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.chip {
+  border: 1px solid var(--line);
+  background: var(--paper);
+  border-radius: 999px;
+  padding: 3px 10px;
+  color: var(--muted);
+}
+
+.chip b {
+  color: var(--ink);
+}
+
+.chip.good b {
+  color: var(--good);
+}
+
+.chip.bad {
+  border-color: #e6b7b0;
+}
+
+.chip.bad b {
+  color: var(--bad);
+}
+
+.chip.warn {
+  border-color: #e6d3a3;
+  color: var(--warn);
+}
+
+.chip.file {
+  background: #eef2f9;
+}
+
+.controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.tab {
+  border: 1px solid var(--line);
+  border-bottom: none;
+  background: #eef2f9;
+  border-radius: 6px 6px 0 0;
+  padding: 5px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.tab.on {
+  background: var(--paper);
+  font-weight: 600;
+}
+
+.tab em {
+  color: var(--muted);
+  font-style: normal;
+  margin-left: 6px;
+  font-size: 11px;
+}
+
+.toggles {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  color: var(--muted);
+}
+
+.toggles label {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.zoom button {
+  border: 1px solid var(--line);
+  background: var(--paper);
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin: 0 4px;
+}
+
+.gaps {
+  border: 1px solid #e6d3a3;
+  background: #fdf9ef;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.gaps.bad {
+  border-color: #e6b7b0;
+  background: #fdf3f2;
+}
+
+.gaps ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.gaps li {
+  margin: 2px 0;
+}
+
+.gaps .at {
+  color: var(--muted);
+}
+
+.sheet {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 0 8px 8px 8px;
+  padding: 10px;
+  overflow: auto;
+  max-height: 68vh;
+}
+
+/* `separate` rather than `collapse` so sticky frozen panes keep their borders —
+   with collapse, borders belong to the table and scroll away from the cell. */
+.xl-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  background: var(--paper);
+}
+
+.xl-table td {
+  padding: 1px 4px;
+  font-size: 12px;
+  max-width: 520px;
+}
+
+.xl-unsupported {
+  color: var(--warn);
+  cursor: help;
+}
+
+.inspector {
+  position: sticky;
+  bottom: 0;
+  margin-top: 8px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.inspector .row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.inspector code {
+  background: #f2f5fa;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.inspector .warn {
+  color: var(--warn);
+}
+
+.prov {
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  background: #eef2f9;
+  color: var(--muted);
+}
+
+.prov.computed {
+  background: #eaf6ee;
+  color: var(--good);
+}
+
+.prov.unsupported,
+.prov.circular {
+  background: #fdf3f2;
+  color: var(--bad);
+}
+
+.drop {
+  border: 2px dashed var(--line);
+  border-radius: 10px;
+  padding: 60px;
+  text-align: center;
+  color: var(--muted);
+}

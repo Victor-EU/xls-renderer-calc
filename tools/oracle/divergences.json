@@ -1,0 +1,155 @@
+{
+  "$comment": [
+    "LibreOffice is the oracle, but LibreOffice is not Excel. Every entry here is a",
+    "probe where the two genuinely disagree and we deliberately follow Excel. They",
+    "are recorded as documented expectations rather than being silently tolerated:",
+    "the harness fails if a listed probe starts *matching* the oracle, because that",
+    "means either LibreOffice changed or we drifted onto its side of the argument.",
+    "Key format: '<suite>:<formula>'."
+  ],
+  "errors:=SQRT(-1)": {
+    "oracle": "#VALUE!",
+    "ours": "#NUM!",
+    "why": "Excel returns #NUM! for a negative square root; LibreOffice returns #VALUE!."
+  },
+  "errors:=VLOOKUP(1,F1:G5,9,FALSE)": {
+    "oracle": "#VALUE!",
+    "ours": "#REF!",
+    "why": "Excel returns #REF! when col_index_num exceeds the table width; LibreOffice returns #VALUE!."
+  },
+  "rounding:=SQRT(K1)": {
+    "oracle": "#VALUE!",
+    "ours": "#NUM!",
+    "why": "Same negative-square-root divergence as errors:=SQRT(-1)."
+  },
+  "rounding:=LN(0)": {
+    "oracle": "#VALUE!",
+    "ours": "#NUM!",
+    "why": "Excel returns #NUM! for LN(0); LibreOffice returns #VALUE!."
+  },
+  "text:=1E20&\"\"": {
+    "oracle": "1E+020",
+    "ours": "1E+20",
+    "why": "LibreOffice pads the exponent to three digits; Excel writes the minimum two."
+  },
+  "text:=123456789012345678&\"\"": {
+    "oracle": "1.23456789012346E+017",
+    "ours": "1.23456789012346E+17",
+    "why": "Same three-digit exponent padding as text:=1E20&\"\"."
+  },
+  "operators:=TRUE&\"\"": {
+    "oracle": "1",
+    "ours": "TRUE",
+    "why": "Excel concatenates a boolean as the word TRUE; LibreOffice concatenates it as 1."
+  },
+  "coercion:=TRUE=1": {
+    "oracle": "TRUE",
+    "ours": "FALSE",
+    "why": "LibreOffice treats booleans as plain numbers; Excel gives them their own type, which ranks above text and above every number. This is the single largest behavioural gap between the two, and Excel's rule is the one models rely on."
+  },
+  "coercion:=FALSE=0": {
+    "oracle": "TRUE",
+    "ours": "FALSE",
+    "why": "LibreOffice treats booleans as plain numbers; Excel gives them their own type, which ranks above text and above every number. This is the single largest behavioural gap between the two, and Excel's rule is the one models rely on."
+  },
+  "coercion:=TRUE>1": {
+    "oracle": "FALSE",
+    "ours": "TRUE",
+    "why": "LibreOffice treats booleans as plain numbers; Excel gives them their own type, which ranks above text and above every number. This is the single largest behavioural gap between the two, and Excel's rule is the one models rely on."
+  },
+  "coercion:=TRUE>\"z\"": {
+    "oracle": "FALSE",
+    "ours": "TRUE",
+    "why": "LibreOffice treats booleans as plain numbers; Excel gives them their own type, which ranks above text and above every number. This is the single largest behavioural gap between the two, and Excel's rule is the one models rely on."
+  },
+  "coercion:=SUM(B1:B5)": {
+    "oracle": "11",
+    "ours": "10",
+    "why": "Excel ignores booleans inside a range; LibreOffice sums TRUE as 1. LibreOffice treats booleans as plain numbers; Excel gives them their own type, which ranks above text and above every number. This is the single largest behavioural gap between the two, and Excel's rule is the one models rely on."
+  },
+  "coercion:=COUNT(B1:B5)": {
+    "oracle": "2",
+    "ours": "1",
+    "why": "Excel counts only numbers inside a range; LibreOffice also counts TRUE. LibreOffice treats booleans as plain numbers; Excel gives them their own type, which ranks above text and above every number. This is the single largest behavioural gap between the two, and Excel's rule is the one models rely on."
+  },
+  "coercion:=SUM(\"5\")": {
+    "oracle": "#VALUE!",
+    "ours": "5",
+    "why": "Microsoft documents that text which can be translated into a number is used; only untranslatable text errors. LibreOffice rejects the direct text argument outright."
+  },
+  "dates:=DATE(1900,1,1)": {
+    "oracle": "2",
+    "ours": "1",
+    "why": "LibreOffice has no phantom 1900-02-29, so every date before 1900-03-01 sits one day off Excel's serials. Excel's numbering is what the files carry."
+  },
+  "dates:=DATE(1900,2,28)": {
+    "oracle": "60",
+    "ours": "59",
+    "why": "Same pre-1900-03-01 offset."
+  },
+  "dates:=YEAR(H5)": {
+    "oracle": "1899",
+    "ours": "1900",
+    "why": "Same pre-1900-03-01 offset, serial 1."
+  },
+  "dates:=MONTH(H5)": {
+    "oracle": "12",
+    "ours": "1",
+    "why": "Same pre-1900-03-01 offset, serial 1."
+  },
+  "dates:=DAY(H5)": {
+    "oracle": "31",
+    "ours": "1",
+    "why": "Same pre-1900-03-01 offset, serial 1."
+  },
+  "financial:=XNPV(0.1,I1:I5,H1:H5)": {
+    "oracle": "100658470.69",
+    "ours": "#NUM!",
+    "why": "The date column is not ascending. Excel requires dates at or after the first one and returns #NUM!; LibreOffice discounts by the negative gap and returns a number."
+  },
+  "text:=TEXTJOIN(\",\",TRUE,B1:B5)": {
+    "oracle": "10,5,1,text",
+    "ours": "10,5,TRUE,text",
+    "why": "LibreOffice treats booleans as plain numbers; Excel keeps them a distinct type. Same root cause as coercion:=TRUE=1."
+  },
+  "text:=TEXTJOIN(\",\",FALSE,B1:B5)": {
+    "oracle": "10,5,1,,text",
+    "ours": "10,5,TRUE,,text",
+    "why": "LibreOffice treats booleans as plain numbers; Excel keeps them a distinct type. Same root cause as coercion:=TRUE=1."
+  },
+  "text:=1E21&\"\"": {
+    "oracle": "1E+021",
+    "ours": "1E+21",
+    "why": "LibreOffice pads the exponent to three digits; Excel writes the minimum two. Same root cause as text:=1E20&\"\"."
+  },
+  "text:=1E22&\"\"": {
+    "oracle": "1E+022",
+    "ours": "1E+22",
+    "why": "LibreOffice pads the exponent to three digits; Excel writes the minimum two. Same root cause as text:=1E20&\"\"."
+  },
+  "text:=1E16&\"\"": {
+    "oracle": "1E+016",
+    "ours": "1E+16",
+    "why": "LibreOffice pads the exponent to three digits; Excel writes the minimum two. Same root cause as text:=1E20&\"\"."
+  },
+  "text:=1E17&\"\"": {
+    "oracle": "1E+017",
+    "ours": "1E+17",
+    "why": "LibreOffice pads the exponent to three digits; Excel writes the minimum two. Same root cause as text:=1E20&\"\"."
+  },
+  "dates:=DATE(26,1,1)": {
+    "oracle": "46023 (2026-01-01)",
+    "ours": "9498 (1926-01-01)",
+    "why": "Microsoft documents that a year argument between 0 and 1899 is added to 1900, so DATE(26,1,1) is 1926. LibreOffice instead applies a two-digit-year window and reads 2026."
+  },
+  "text:=1E-15&\"\"": {
+    "oracle": "1E-015",
+    "ours": "1E-15",
+    "why": "LibreOffice pads the exponent to three digits; Excel writes the minimum two. Same root cause as text:=1E20&\"\"."
+  },
+  "text:=1E-20&\"\"": {
+    "oracle": "1E-020",
+    "ours": "1E-20",
+    "why": "LibreOffice pads the exponent to three digits; Excel writes the minimum two. Same root cause as text:=1E20&\"\"."
+  }
+}

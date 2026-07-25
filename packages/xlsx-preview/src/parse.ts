@@ -1,0 +1,99 @@
+/**
+ * Loading a workbook: two passes over the same bytes, each doing what it is best at.
+ *
+ *   ExcelJS  → styles, fonts, fills, borders, merges, column widths, panes.
+ *   ooxml.ts → formulas, the raw `t` attribute, shared-formula translation.
+ *
+ * ExcelJS is kept because its style fidelity is proven (this is the renderer the
+ * original spike validated cell by cell against a real financial model) and
+ * because rewriting `styles.xml` handling would be a regression risk with no
+ * upside. It is *not* trusted for formula values, because it drops the one
+ * attribute the recalc story depends on.
+ *
+ * Both passes get their own copy of the buffer: ExcelJS detaches the ArrayBuffer
+ * it is handed, and a detached buffer read later yields zero bytes rather than
+ * an error — a failure that unit tests with small fixtures do not catch.
+ */
+
+import ExcelJS from 'exceljs';
+import { format as numFormat } from 'numfmt';
+import { setNumberFormatter } from '@xlscalc/formula-engine';
+import { bind, type BindOptions, type PreviewModel } from './bind.js';
+import { readXlsx, type RawWorkbook } from './ooxml.js';
+
+// TEXT() asks the host for a number formatter rather than shipping its own; the
+// renderer already carries numfmt, so wire it up once here.
+setNumberFormatter((code, value) => numFormat(code, value as never));
+
+export interface SheetInfo {
+  name: string;
+  /** Index into both `styled.worksheets` and the engine's sheet list. */
+  index: number;
+  rows: number;
+  cols: number;
+  cells: number;
+  formulas: number;
+  uncached: number;
+}
+
+export interface PreviewDocument {
+  styled: ExcelJS.Workbook;
+  raw: RawWorkbook;
+  model: PreviewModel;
+  sheets: SheetInfo[];
+  parseMs: number;
+  evalMs: number;
+}
+
+export interface LoadOptions extends BindOptions {}
+
+export async function loadXlsx(buf: ArrayBuffer, opts: LoadOptions = {}): Promise<PreviewDocument> {
+  const t0 = now();
+
+  const styled = new ExcelJS.Workbook();
+  await styled.xlsx.load(buf.slice(0));
+  const raw = readXlsx(buf.slice(0));
+  const parseMs = now() - t0;
+
+  const t1 = now();
+  const model = bind(raw, opts);
+  const evalMs = now() - t1;
+
+  // The engine's sheet order comes from workbook.xml, which is also the order
+  // ExcelJS reports, but they are matched by name so a mismatch cannot silently
+  // shift every cross-sheet reference by one.
+  const sheets: SheetInfo[] = raw.sheets.map((sheet, index) => {
+    const ws = styled.getWorksheet(sheet.name) ?? styled.worksheets[index];
+    let formulas = 0;
+    let uncached = 0;
+    for (const cell of sheet.cells) {
+      if (!cell.f) continue;
+      formulas++;
+      const rec = model.engine.record(index, cell.row, cell.col);
+      if (rec?.cached === undefined) uncached++;
+    }
+    return {
+      name: sheet.name,
+      index,
+      rows: Math.max(ws?.rowCount ?? 0, maxOf(sheet.cells, (c) => c.row)),
+      cols: Math.max(ws?.columnCount ?? 0, maxOf(sheet.cells, (c) => c.col)),
+      cells: sheet.cells.length,
+      formulas,
+      uncached,
+    };
+  });
+
+  return { styled, raw, model, sheets, parseMs: Math.round(parseMs), evalMs: Math.round(evalMs) };
+}
+
+function maxOf<T>(items: T[], pick: (t: T) => number): number {
+  let max = 0;
+  for (const item of items) {
+    const v = pick(item);
+    if (v > max) max = v;
+  }
+  return max;
+}
+
+const now = (): number =>
+  typeof performance !== 'undefined' ? performance.now() : Date.now();
