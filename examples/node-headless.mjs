@@ -13,6 +13,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { argv } from 'node:process';
 
 import { inspectXlsx, loadXlsx, renderToHtml, plainText } from '@xlscalc/xlsx-preview';
@@ -78,8 +79,10 @@ for (const m of doc.model.report.mismatches.slice(0, 5)) {
 // The stylesheet is read from the package rather than copied, so there is one
 // source of truth for what a refused cell looks like.
 
+// `createRequire().resolve` rather than `import.meta.resolve`, which is only
+// unflagged from Node 20.6 — and both packages say they run on 18.
 const css = readFileSync(
-  new URL(import.meta.resolve('@xlscalc/xlsx-preview/view/style.css')),
+  createRequire(import.meta.url).resolve('@xlscalc/xlsx-preview/view/style.css'),
   'utf8',
 );
 const html = renderToHtml(doc, 0, { document: true, css, showProvenance: true });

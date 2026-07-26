@@ -1,7 +1,7 @@
 # xlsx renderer & calculator
 
 A client-side, view-only `.xlsx` preview that **computes formula values in the
-browser**. No server, nothing uploaded, MIT throughout.
+browser**. No server, nothing uploaded, MIT.
 
 **The job:** a user asked an agent for a financial model, the agent produced an
 `.xlsx`, and the user needs to look at it and decide whether it is right —
@@ -21,13 +21,13 @@ generated financial model renders as a labelled skeleton. The previous fix was a
 server-side LibreOffice recalc, which costs the preview its two defining
 properties: no server, and nothing leaves the browser.
 
-**Status: built and verified.** 118 tests green; 399 oracle probes, a
+**Status: built and verified.** 153 tests green; 399 oracle probes, a
 **37,098-cell synthetic corpus of ten whole workbooks**, and a
 **202,795-cell corpus of ten *real* workbooks** — including a 138,421-formula
-business plan last saved by Excel itself — all at 100 % accuracy with zero
-false confidence; and a real-browser check confirming that a file with *no*
-cached values renders identical numbers to the same file after a LibreOffice
-recalc.
+business plan last saved by Excel itself — with **zero unexplained
+disagreements** anywhere and every deliberate divergence declared and counted;
+and a real-browser check confirming that a file with *no* cached values renders
+identical numbers to the same file after a LibreOffice recalc.
 
 ```
 npm install
@@ -35,7 +35,7 @@ npm run verify                 # typecheck, test, build, and smoke the published
 npm run dev                    # the preview at http://localhost:5176
 python3 tools/oracle/generate.py   # rebuild oracle fixtures (needs LibreOffice)
 python3 eval/build.py              # rebuild the eval corpus (needs LibreOffice)
-npm run eval:real                  # the real-workbook corpus, if you have one
+npm run eval:real                  # the real-workbook corpus — private, not in this repo
 node tools/verify/drive.mjs        # end-to-end check in a real browser
 ```
 
@@ -85,9 +85,11 @@ is in [VERSIONING.md](./VERSIONING.md).
 
 **The number to know before adopting: about 36% of formula cells in the real
 corpus render ⚠.** Almost none of that is a missing function; refusal
-propagates, so in the worst workbook 204 cells using `OFFSET` and `CELL` left
+propagates, so in the worst workbook 33 cells using `OFFSET` and `CELL` left
 64,809 warning. Whether that is acceptable depends on your files, which is what
-`inspectXlsx` is for. On the cells it does answer, agreement is 100%.
+`inspectXlsx` is for. On the 128,976 cells it does answer there are **zero
+unexplained disagreements**; 3,050 of them differ from the value the file itself
+stored, and each falls under a documented rule with an exact expected count.
 
 ---
 
@@ -128,7 +130,13 @@ tools/verify              real-browser end-to-end, screenshots, published-packag
 
 `formula-engine` has **no dependencies at all** and runs in Node, a worker or the
 browser. `xlsx-preview` adds ExcelJS (styles), numfmt (number formats) and fflate
-(unzip) — all MIT.
+(unzip). All three are MIT; ExcelJS brings a further ~80 transitive packages
+whose licences are permissive but not uniformly MIT — Apache-2.0, ISC, BSD-3,
+one Unlicense, one dual MIT-or-GPL. It also brings their advisories: `npm audit`
+reports high-severity findings in `minimatch` and friends, none of them on a code
+path this library calls. That tree is the price of ExcelJS's style fidelity, and
+it is the single largest thing to weigh before installing `xlsx-preview`; the
+engine on its own has none of it.
 
 Inside `xlsx-preview` the boundary that matters is `layout.ts`: it reads a
 sheet's whole appearance out of ExcelJS once, at load, into plain data. Nothing
@@ -241,16 +249,30 @@ criteria comparison. Every conditional sum over a column with a header or an
 ### The third harness: workbooks nobody wrote for us
 
 A synthetic corpus is a much better sample than hand-picked probes and is still
-not production output — which [`eval/`](eval/README.md) said about itself.
-[`eval/real/`](eval/real/README.md) is that sample: ten workbooks written by
-other people and other tools, graded against the answers their own applications
-computed. Provenance is load-bearing, because it decides what a cache is worth.
-One of them was last saved by Microsoft Excel, which makes its 138,421 cached
-values the best ground truth this project has had.
+not production output — which [`eval/`](eval/README.md) said about itself. The
+third harness is that sample: ten workbooks written by other people and other
+tools, graded against the answers their own applications computed. Provenance is
+load-bearing, because it decides what a cache is worth. One of them was last
+saved by Microsoft Excel, which makes its 138,421 cached values the best ground
+truth this project has had.
 
 ```
-202,795 formula cells   answered 63.6%   accuracy 100.0%   unexplained 0
+202,795 formula cells   answered 63.6%   unexplained 0   declared divergences 3,050
 ```
+
+> **This corpus is not in the repository, and will not be.** They are real
+> businesses' budgets, board packs and business plans, shared for a technical
+> purpose and not for publication — so the workbooks, the harness that names
+> them, the per-cell dumps and the report are all private. What is published is
+> what this section says: aggregates, and the bugs they found.
+>
+> That is a real weakening of the evidence and it should be read as one. Every
+> number above is *reported* rather than reproducible by a reader, and you have
+> only this repository's word for it. The two harnesses that **are** reproducible
+> — the 399-probe oracle and the 37,098-cell synthetic corpus, both scored
+> against LibreOffice — are the ones to judge the engine on if you would rather
+> not take a claim on trust. `npm run oracle` and `npm run eval` regenerate both
+> from source, given a LibreOffice install.
 
 It found eight more bugs across two passes, most of which the synthetic corpus
 could not have found in principle. The worst: **every formula in a shared range was reconstructed
@@ -286,7 +308,7 @@ in IEEE-754 and `Math.round(2.675*100)/100` gives 2.67.
 
 ## What it computes
 
-**197 functions** — the exact list is in [`CAPABILITY.md`](./CAPABILITY.md),
+**204 functions** — the exact list is in [`CAPABILITY.md`](./CAPABILITY.md),
 generated from the function registry and asserted on every test run, so it cannot
 drift from the code. It doubles as an allowlist that can be published into the
 generator's prompt, so the renderer never meets a formula it cannot compute.
@@ -391,6 +413,14 @@ Two findings from getting there, both recorded in the code:
 
 Stated plainly rather than buried:
 
+- **The grid is drawn in full — there is no virtualisation.** Every cell of a
+  sheet's extent becomes a `<td>`, which is fine for a financial model and fatal
+  for a stray: `rowCount` is the last row with *anything* in it, so one
+  accidental value in the bottom-right corner declares 1,048,576 × 16,384 and
+  seventeen billion cells is an out-of-memory crash, not a slow render. Both
+  renderers therefore stop at `DEFAULT_RENDER_LIMITS` (~150,000 cells) and
+  caption what they left out; a host that knows its files can pass its own
+  `limits`. Windowing the grid instead is the real fix and is not built.
 - **The Worker is opt-in, and `loadXlsx` on its own still blocks.** The
   flattening this needed — `layout.ts` and `snapshot.ts` — is done, and
   `createPreviewWorker()` moves the whole load off-thread with no change to the
@@ -410,14 +440,16 @@ Stated plainly rather than buried:
   default Office palette; a workbook with an embedded custom theme in
   `xl/theme/theme1.xml` will render its accent colours slightly off.
 - **In-sheet charts are not drawn.**
-- **The real corpus is ten files, and only one of them is Excel-authored.**
-  [`eval/real/`](eval/real/README.md) closed the "no production output" gap —
-  202,795 cells written by other people and other tools — but ten workbooks are
-  wide, not random. Everything graded against a Google Sheets export or a
-  generator is graded against a second opinion; only the business plan Excel
-  saved is ground truth. A file's cache can also be stale, recording what its
-  application last computed rather than what it would compute today. Nothing
-  here looked stale; nothing rules it out.
+- **The real corpus is ten files, only one of them Excel-authored — and it is
+  private.** It closed the "no production output" gap — 202,795 cells written by
+  other people and other tools — but ten workbooks are wide, not random.
+  Everything graded against a Google Sheets export or a generator is graded
+  against a second opinion; only the business plan Excel saved is ground truth. A
+  file's cache can also be stale, recording what its application last computed
+  rather than what it would compute today. Nothing here looked stale; nothing
+  rules it out. And because the workbooks are other people's confidential
+  business data, none of that is in this repository for you to check — see the
+  note above.
 - **No iterative calculation.** A workbook that sets `iterate="1"` is asking for
   its circular references to be converged, which is the ordinary shape of
   interest on an average balance. We refuse them. The refusal is correct for an

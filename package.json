@@ -2,6 +2,13 @@
   "name": "xls-renderer-calc",
   "private": true,
   "version": "0.2.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Victor-EU/xls-renderer-calc.git"
+  },
+  "bugs": "https://github.com/Victor-EU/xls-renderer-calc/issues",
+  "homepage": "https://github.com/Victor-EU/xls-renderer-calc#readme",
   "type": "module",
   "workspaces": [
     "packages/*",

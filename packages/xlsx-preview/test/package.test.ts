@@ -123,13 +123,18 @@ describe('renderToHtml', () => {
 
   it('escapes everything that came out of the file', () => {
     // A cell's text, a sheet name and a hyperlink are all attacker-controlled
-    // as far as this library is concerned.
+    // as far as this library is concerned. Escaping is the second line here —
+    // the scheme allowlist in layout.ts is the first, and hostile.test.ts covers
+    // it — but a blocked target is still interpolated, into a `title`, so it
+    // still has to be escaped.
     const html = renderToHtml(
       {
         layouts: [
           {
             ...blankLayout('S', 1, 1),
-            content: new Map([[layoutKey(1, 1), { kind: 'link', text: '<b>x</b>', href: 'javascript:alert(1)"' }]]),
+            content: new Map([
+              [layoutKey(1, 1), { kind: 'link', text: '<b>x</b>', href: 'javascript:alert(1)"', unsafe: true }],
+            ]),
           },
         ],
         model: {

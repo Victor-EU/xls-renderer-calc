@@ -126,16 +126,30 @@ for this project.
 
 Almost none of that is a missing function. Refusal propagates by design, so a
 handful of cells using something unsupported can darken a large fraction of a
-model: in the worst file, 204 such cells left 64,809 warning. Whether that is
+model: in the worst file, 33 such cells left 64,809 warning. Whether that is
 acceptable depends entirely on your files, which is what `inspectXlsx` is for.
 
-What you get in exchange, on the 128,976 cells it does answer: **100%
-agreement**, zero unexplained disagreements, and every known divergence declared
-with an exact expected count that is gated in both directions.
+What you get in exchange, on the 128,976 cells it does answer: **zero
+unexplained disagreements**. 3,050 of those cells deliberately differ from the
+value the file itself stored — the writer was Google Sheets, which reads a blank
+reference differently from Excel, and we follow Excel — and each falls under a
+named rule with an exact expected count, gated in both directions.
 
 Other limits worth knowing before you adopt:
 
 - **View-only.** No editing, no write-back, no charts, no pivot tables.
+- **The grid is drawn in full — there is no virtualisation.** Every cell of a
+  sheet's extent becomes a `<td>`, and a sheet's extent runs to the last row with
+  anything in it, so one stray value in the bottom-right corner of a sheet
+  declares a million rows. Both renderers stop at `DEFAULT_RENDER_LIMITS`
+  (~150,000 cells) and caption what they left out rather than freezing the tab.
+  Pass `limits` to raise or lower it.
+- **ExcelJS brings a large dependency tree**, and with it `npm audit` findings —
+  currently high-severity ones in `minimatch` and `brace-expansion`, reached
+  through ExcelJS's Node-side zip writing, which this package never calls. They
+  are not exploitable through anything exported here, but they will show up in
+  your install and in CI gates that fail on severity. `@xlscalc/formula-engine`
+  on its own has no dependencies at all.
 - **Styling comes from ExcelJS**, which is a large dependency and occasionally
   cannot read a file that our own reader can. When that happens the values are
   unaffected, `doc.stylesError` is set, and the sheet renders in default fonts —
@@ -144,6 +158,12 @@ Other limits worth knowing before you adopt:
   cycles; they are refused and reported as cycles, not as a broken model.
 - **Custom themes** embedded in `xl/theme/theme1.xml` fall back to the default
   Office palette.
+- **Hyperlinks are followed only for `http`, `https` and `mailto`.** A `.xlsx`
+  can name any target it likes, `javascript:` included, and escaping the URL does
+  nothing about the scheme. Anything else renders as marked text with the target
+  on hover — the cell still says what it said, it just is not a link. Relative
+  file paths are in that group too: they point at the author's disk, not at
+  anything a browser can reach.
 
 ## API
 
@@ -154,6 +174,8 @@ Other limits worth knowing before you adopt:
 | `renderToHtml(doc, sheet, opts?)` | the grid as an HTML string |
 | `toSnapshot` / `fromSnapshot` | flatten a document so it survives `postMessage` |
 | `layoutSheet`, `blankLayout`, `mergeMap`, `paneOffsets` | the layout model |
+| `renderExtent`, `truncationNote`, `DEFAULT_RENDER_LIMITS` | how much of a sheet a renderer will draw, and what to say about the rest |
+| `isSafeHref` | whether a hyperlink target may be navigated to |
 | `findHardcoded` | literals whose neighbours' formulas contradict them |
 | `readXlsx` | the raw OOXML read, with no evaluation |
 | `/view` → `ExcelView`, `resolveContent`, `cellCss` | the React renderer |

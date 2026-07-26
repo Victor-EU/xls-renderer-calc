@@ -28,25 +28,47 @@ So:
   it is named in the changelog under a *Capability* heading with the functions
   listed. If you pin, pin to a patch range.
 - **`CAPABILITY.md` is generated from the registry**, not written by hand, and it
-  is committed. Diffing it between two versions is the supported way to see
-  exactly what changed about what renders. `implementedFunctions()` and
-  `refusedFunctions()` return the same lists at runtime.
+  ships inside `@xlscalc/formula-engine`. Diffing it between two installed
+  versions is the supported way to see exactly what changed about what renders,
+  which means it has to be in the tarball and not only in the repository.
+  `implementedFunctions()` and `refusedFunctions()` return the same lists at
+  runtime.
 - **A fix that changes a computed value is also at least a minor bump**, for the
   same reason and with the same heading. Agreeing with Excel more closely than
   we did last week is still a different number on someone's screen.
 
 ## What is *not* covered by semver
 
-- **The real-data corpus is ten workbooks.** Wide ones, from five different
-  writers, but not a random sample. A release being green means it agrees with
-  every oracle we have, not that it agrees with Excel everywhere.
-- **Declared divergences.** `eval/real/divergences.json` lists the places we
+- **The real-data corpus is ten workbooks, and it is private.** Wide ones, from
+  five different writers, but not a random sample — and they are real businesses'
+  confidential files, so a reader cannot rerun that gate. A release being green
+  means it agrees with every oracle we have, not that it agrees with Excel
+  everywhere.
+- **Declared divergences.** The real corpus's rule file lists the places we
   knowingly differ from a file's own cached values, each with an exact expected
   count. They are documented rather than fixed, and the count is gated in both
   directions — a rule that starts explaining more cells, or fewer, fails the
-  build.
+  build. That file is private along with the corpus itself; the README says why.
 - **`stylesError` output.** The fidelity of the *styling* parse depends on
   ExcelJS. A workbook it cannot read still renders its values, in default fonts.
+
+## Releasing
+
+Order matters, because the second package depends on the first:
+
+```bash
+npm run verify                              # typecheck, tests, build, and the published-package smoke
+npm publish -w @xlscalc/formula-engine      # prepack rebuilds dist/ and copies CAPABILITY.md in
+npm publish -w @xlscalc/xlsx-preview        # its dependency range must already resolve on the registry
+```
+
+Both are scoped, so the `@xlscalc` npm organisation has to exist and the
+publishing account has to be a member of it; `publishConfig.access` is already
+`public`, which scoped packages need or npm assumes private. `prepack` runs the
+build, so a stale `dist/` cannot ship — but nothing rebuilds `CAPABILITY.md`, so
+run `npm test` first and let it fail if the registry has moved.
+
+`apps/demo` is `private: true` and is not published.
 
 ## Deprecations
 

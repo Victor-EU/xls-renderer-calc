@@ -1,7 +1,15 @@
 import { Fragment, type CSSProperties, type ReactNode } from 'react';
 import { cellCss } from '../css.js';
 import { plainText, resolveContent, type CellContent } from '../format.js';
-import { layoutKey, mergeMap, paneOffsets, type CellStyle } from '../layout.js';
+import {
+  layoutKey,
+  mergeMap,
+  paneOffsets,
+  renderExtent,
+  truncationNote,
+  type CellStyle,
+  type RenderLimits,
+} from '../layout.js';
 import type { OverlayCell, RenderModel, RenderSource } from '../bind.js';
 
 /**
@@ -51,6 +59,12 @@ export interface ExcelViewProps {
   /** Cells to highlight as precedents of the selected cell. */
   highlight?: ReadonlySet<string>;
   onSelect?: (address: { row: number; col: number }) => void;
+  /**
+   * How much of the sheet to draw. Every cell of the extent becomes a `<td>`, so
+   * a sheet past this is cut short and captioned rather than left to freeze the
+   * tab — see `DEFAULT_RENDER_LIMITS`.
+   */
+  limits?: Partial<RenderLimits>;
 }
 
 export default function ExcelView({
@@ -63,14 +77,18 @@ export default function ExcelView({
   flagged,
   highlight,
   onSelect,
+  limits,
 }: ExcelViewProps): ReactNode {
   const layout = doc.layouts[sheetIndex];
   if (!layout) return null;
   const model = doc.model;
 
-  const { rows: nRows, cols: nCols, colWidths, rowHeights } = layout;
+  const { colWidths, rowHeights } = layout;
+  const extent = renderExtent(layout, limits);
+  const { rows: nRows, cols: nCols } = extent;
   const merges = mergeMap(layout);
-  const offsets = paneOffsets(layout);
+  const offsets = paneOffsets(layout, extent);
+  const cut = truncationNote(layout, extent);
 
   const rows: ReactNode[] = [];
   for (let r = 1; r <= nRows; r++) {
@@ -98,7 +116,11 @@ export default function ExcelView({
       if (mismatched) marks.push('xl-mismatch');
       if (highlight?.has(`${r}:${c}`)) marks.push('xl-highlight');
 
+      // Clamped to the drawn extent: a span reaching past the last column makes
+      // the browser invent columns, and everything below it slides sideways.
       const span = merges.span(r, c);
+      const spanRows = span ? Math.min(span.rows, nRows - r + 1) : 1;
+      const spanCols = span ? Math.min(span.cols, nCols - c + 1) : 1;
       const color = contentColor(content);
       const css = cellCss(style, {
         gridlines,
@@ -114,8 +136,8 @@ export default function ExcelView({
           key={c}
           className={marks.length > 0 ? marks.join(' ') : undefined}
           style={css}
-          rowSpan={span?.rows}
-          colSpan={span?.cols}
+          rowSpan={spanRows > 1 ? spanRows : undefined}
+          colSpan={spanCols > 1 ? spanCols : undefined}
           title={tooltip(overlay, content)}
           onClick={onSelect ? () => onSelect({ row: r, col: c }) : undefined}
         >
@@ -136,6 +158,7 @@ export default function ExcelView({
   return (
     <div style={{ transform: `scale(${zoom})`, transformOrigin: 'top left', width: 'fit-content' }}>
       <table className="xl-table">
+        {cut ? <caption className="xl-truncated">{cut}</caption> : null}
         <colgroup>{cols}</colgroup>
         <tbody>{rows}</tbody>
       </table>
@@ -172,7 +195,14 @@ function renderContent(c: CellContent): ReactNode {
         </span>
       );
     case 'link':
-      return (
+      // A `javascript:` or `data:` target out of someone else's workbook is code,
+      // not a link. The text still renders, marked, with the target on hover —
+      // see `isSafeHref`.
+      return c.unsafe ? (
+        <span className="xl-blocked-link" title={`link not followed — ${c.href}`}>
+          {c.text}
+        </span>
+      ) : (
         <a href={c.href} target="_blank" rel="noreferrer">
           {c.text}
         </a>

@@ -45,7 +45,7 @@ design rather than a diagnostic:
 compute this" to a figure, and refusal propagates: a `SUM` over a cell we
 declined to compute is itself refused rather than quietly dropping the input.
 That is deliberate, and it is expensive — in the largest workbook of the
-real-data corpus, 204 cells using `OFFSET` and `CELL` leave 64,809 cells
+real-data corpus, 33 cells using `OFFSET` and `CELL` leave 64,809 cells
 warning rather than numbered. A total that silently omits a term it could not
 evaluate is precisely the failure this library exists to prevent.
 
@@ -63,9 +63,9 @@ implementedFunctions();   // ['ABS', 'ACOS', 'AND', … ] — 204 of them
 refusedFunctions();       // ['AGGREGATE', 'CELL', 'FILTER', … ] — 26
 ```
 
-The repository's `CAPABILITY.md` is generated from the same registry and
-committed, so diffing it between two versions shows exactly what changed about
-what renders.
+`CAPABILITY.md` ships inside this package and is generated from the same
+registry, so diffing it between two installed versions shows exactly what
+changed about what renders.
 
 26 further functions are *known and deliberately refused* — `OFFSET`,
 `INDIRECT`, `CELL`, `INFO`, the dynamic-array family — each with a stated
@@ -88,12 +88,19 @@ one could not:
    ones, since a formula in isolation is not a formula in a model.
 3. **Ten real workbooks** — 202,795 formula cells nobody wrote for this project,
    graded against the values their own applications computed. On the 128,976
-   cells it answers, agreement is **100%**, with zero unexplained disagreements
-   and every known divergence declared with an exact count.
+   cells it answers there are **zero unexplained disagreements**. 3,050 of them
+   deliberately differ from the value the file stored — a Google Sheets export
+   treats a blank reference differently from Excel, and we follow Excel — and
+   each falls under a named rule with an exact expected count, gated in both
+   directions so a rule that starts explaining more cells, or fewer, fails the
+   build.
 
 The real corpus found five bugs on its first run and three more on a second
 pass — most of them things the synthetic corpus could not have found in
-principle. `eval/real/README.md` in the repository has the details.
+principle. Those workbooks are other people's confidential business data, so
+they are not published and neither is the harness that reads them; the two
+harnesses you *can* rerun are the oracle and the synthetic corpus, both in the
+repository.
 
 ## Beyond evaluating
 

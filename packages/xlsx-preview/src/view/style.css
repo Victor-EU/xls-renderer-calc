@@ -46,6 +46,28 @@
   font-weight: 600;
 }
 
+/* A hyperlink whose target is not a scheme we will navigate to — a `javascript:`
+   URL in a workbook is code, and this library renders other people's files. The
+   text is still the cell's text, so it reads as text; the dotted underline and
+   the tooltip say a link was there and was not followed. */
+.xl-blocked-link {
+  text-decoration: underline dotted var(--xl-warn, #b26a00);
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
+/* The grid is painted in full, so a sheet past the render limit is cut short.
+   That has to be visible: a truncated sheet that looks complete is the same
+   failure as a guessed number, one row lower down. */
+.xl-truncated {
+  caption-side: top;
+  text-align: left;
+  padding: 4px 6px;
+  font-size: var(--xl-font-size, 12px);
+  color: var(--xl-warn, #b26a00);
+  background: var(--xl-paper, #ffffff);
+}
+
 /*
  * The three state classes below all need `!important`, and it is not laziness:
  * the file's own fills and borders arrive as inline styles on the same <td>,

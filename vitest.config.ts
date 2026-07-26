@@ -13,6 +13,8 @@ export default defineConfig({
       'packages/*/test/**/*.test.ts',
       'tools/oracle/*.test.ts',
       'eval/*.test.ts',
+      // Matches nothing in a clone: the real-workbook corpus and its harness are
+      // other people's confidential files and are not published. See the README.
       'eval/real/*.test.ts',
     ],
     environment: 'node',

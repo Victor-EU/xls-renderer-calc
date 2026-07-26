@@ -13,8 +13,9 @@
  * in when you want a standalone document:
  *
  *     import { readFileSync } from 'node:fs';
+ *     import { createRequire } from 'node:module';
  *     const css = readFileSync(
- *       new URL(import.meta.resolve('@xlscalc/xlsx-preview/view/style.css')),
+ *       createRequire(import.meta.url).resolve('@xlscalc/xlsx-preview/view/style.css'),
  *       'utf8',
  *     );
  *     const page = renderToHtml(doc, 0, { document: true, css });
@@ -22,7 +23,15 @@
 
 import { cellCss, cssText } from './css.js';
 import { plainText, resolveContent, type CellContent } from './format.js';
-import { layoutKey, mergeMap, paneOffsets, type CellStyle } from './layout.js';
+import {
+  layoutKey,
+  mergeMap,
+  paneOffsets,
+  renderExtent,
+  truncationNote,
+  type CellStyle,
+  type RenderLimits,
+} from './layout.js';
 import type { OverlayCell, RenderSource } from './bind.js';
 
 const EMPTY_STYLE: CellStyle = {};
@@ -44,6 +53,8 @@ export interface RenderHtmlOptions {
   css?: string;
   /** Document title, when `document` is set. Defaults to the sheet name. */
   title?: string;
+  /** How much of the sheet to draw. See `DEFAULT_RENDER_LIMITS`. */
+  limits?: Partial<RenderLimits>;
 }
 
 /** Render one sheet of a loaded document as HTML. */
@@ -51,20 +62,24 @@ export function renderToHtml(doc: RenderSource, sheet: number, opts: RenderHtmlO
   const layout = doc.layouts[sheet];
   if (!layout) return '';
   const model = doc.model;
+  const extent = renderExtent(layout, opts.limits);
   const merges = mergeMap(layout);
-  const offsets = paneOffsets(layout);
+  const offsets = paneOffsets(layout, extent);
   const tooltips = opts.tooltips !== false;
 
   const out: string[] = [];
-  out.push('<table class="xl-table"><colgroup>');
-  for (let c = 1; c <= layout.cols; c++) {
+  out.push('<table class="xl-table">');
+  const cut = truncationNote(layout, extent);
+  if (cut) out.push(`<caption class="xl-truncated">${esc(cut)}</caption>`);
+  out.push('<colgroup>');
+  for (let c = 1; c <= extent.cols; c++) {
     out.push(`<col style="width:${layout.colWidths[c] ?? 0}px">`);
   }
   out.push('</colgroup><tbody>');
 
-  for (let r = 1; r <= layout.rows; r++) {
+  for (let r = 1; r <= extent.rows; r++) {
     out.push(`<tr style="height:${layout.rowHeights[r] ?? 0}px">`);
-    for (let c = 1; c <= layout.cols; c++) {
+    for (let c = 1; c <= extent.cols; c++) {
       if (merges.covered(r, c)) continue;
       const key = layoutKey(r, c);
       const style = layout.styles[layout.styleAt.get(key) ?? 0] ?? EMPTY_STYLE;
@@ -90,12 +105,17 @@ export function renderToHtml(doc: RenderSource, sheet: number, opts: RenderHtmlO
         }),
       );
 
+      // A merge that straddles the cut is clamped to it: a colspan reaching past
+      // the last column makes the browser invent columns, and the grid below
+      // slides sideways — which reads as a data bug rather than a truncated view.
       const span = merges.span(r, c);
+      const spanRows = span ? Math.min(span.rows, extent.rows - r + 1) : 1;
+      const spanCols = span ? Math.min(span.cols, extent.cols - c + 1) : 1;
       const attrs = [
         marks.length > 0 ? ` class="${marks.join(' ')}"` : '',
         css ? ` style="${esc(css)}"` : '',
-        span && span.rows > 1 ? ` rowspan="${span.rows}"` : '',
-        span && span.cols > 1 ? ` colspan="${span.cols}"` : '',
+        spanRows > 1 ? ` rowspan="${spanRows}"` : '',
+        spanCols > 1 ? ` colspan="${spanCols}"` : '',
       ];
       if (tooltips) {
         const tip = tooltip(overlay, content);
@@ -151,6 +171,12 @@ function contentHtml(c: CellContent): string {
     case 'unsupported':
       return `<span class="xl-unsupported" title="${esc(c.reason)}">⚠</span>`;
     case 'link':
+      // A target we will not navigate to still shows its text — the cell said
+      // something and hiding it would be its own kind of lie — but as a marked
+      // span, with the target on hover so nothing is concealed. See `isSafeHref`.
+      if (c.unsafe) {
+        return `<span class="xl-blocked-link" title="${esc(`link not followed — ${c.href}`)}">${esc(c.text)}</span>`;
+      }
       // `noreferrer` and an escaped href: the URL comes out of someone else's
       // file, so it is untrusted input on the way to an anchor.
       return `<a href="${esc(c.href)}" target="_blank" rel="noreferrer">${esc(c.text)}</a>`;

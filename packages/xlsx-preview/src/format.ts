@@ -26,7 +26,8 @@ export type CellContent =
   | { kind: 'error'; text: string }
   | { kind: 'text'; text: string; color?: string; numeric?: boolean }
   | { kind: 'rich'; runs: RichRun[] }
-  | { kind: 'link'; text: string; href: string };
+  /** `unsafe` means the target is not a scheme we will navigate to — see `isSafeHref`. */
+  | { kind: 'link'; text: string; href: string; unsafe?: true };
 
 /** The eight colour names an Excel format code can name, e.g. `[Red]`. */
 const NUMFMT_COLORS: Record<string, string> = {

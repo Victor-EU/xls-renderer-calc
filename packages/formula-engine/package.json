@@ -5,6 +5,13 @@
   "keywords": ["excel", "xlsx", "formula", "spreadsheet", "parser", "evaluator", "calculation"],
   "license": "MIT",
   "author": "Victor-EU",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Victor-EU/xls-renderer-calc.git",
+    "directory": "packages/formula-engine"
+  },
+  "bugs": "https://github.com/Victor-EU/xls-renderer-calc/issues",
+  "homepage": "https://github.com/Victor-EU/xls-renderer-calc/tree/main/packages/formula-engine#readme",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,7 +22,7 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": ["dist", "src", "!src/**/*.test.ts", "CAPABILITY.md", "README.md", "LICENSE"],
   "sideEffects": false,
   "engines": {
     "node": ">=18"
@@ -25,7 +32,7 @@
   },
   "scripts": {
     "prepack": "npm run build",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').copyFileSync('../../CAPABILITY.md','CAPABILITY.md')\"",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   }
 }

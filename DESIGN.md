@@ -64,7 +64,7 @@ is the quickest way to check the design is answering the question that was asked
 | *"a web app renderer … light weight browser based, we don't want heavy .net server end"* | No server on the default path at all — not a lighter one. The engine has **zero dependencies**, no wasm, and nothing is uploaded. LibreOffice survives only as a user-consented escalation (§13.1, tier 3) |
 | *"build on what existed `:5176`, `/Users/vz/OSS excel render tests`"* | The spike's renderer is kept and ported rather than rewritten (§6.1, §6.3): its style fidelity was already validated cell by cell against a real model. Its two sample files remain the project's oldest ground truth, and the headline check (§2.6) is still measured against them |
 | *"we can write the calculator from zero"* | Explicit authorisation for §0. It removed "but could we just adopt something" as a live question and let the decision turn on the properties we needed |
-| *"there is no constraint of effort"* | Why the oracle exists at all. A 399-probe differential harness against LibreOffice is not the cheap path to a working preview; it is the path to one whose numbers can be *defended*. Same reason the library is 197 functions rather than the two the sample contained |
+| *"there is no constraint of effort"* | Why the oracle exists at all. A 399-probe differential harness against LibreOffice is not the cheap path to a working preview; it is the path to one whose numbers can be *defended*. Same reason the library is 204 functions rather than the two the sample contained |
 | *"license has to be the most permissive"* | MIT/Apache-2.0 only. It disqualified HyperFormula — the most mature option — on licence rather than on quality (§4), and every shipped dependency is MIT |
 | *"bottomline, it has to work for the users to preview the excel sheet that's generated"* | Turned into an executable acceptance test rather than left as a sentiment. See below |
 
@@ -96,7 +96,7 @@ because nothing needs it yet (write-back, §13.2), and each says so where it sit
 >
 > | Original | What happened |
 > |---|---|
-> | §0/§5/App. A — build a **closed `{SUM, IF}` grammar** for our own files | ✗ The vocabulary is not closed. Built broad (197 functions) and gated by an oracle instead — §2.1, §5 |
+> | §0/§5/App. A — build a **closed `{SUM, IF}` grammar** for our own files | ✗ The vocabulary is not closed. Built broad (204 functions) and gated by an oracle instead — §2.1, §5 |
 > | §8.2 — range dependencies are "**not a v1 concern**" | ✗ Materialising the graph is O(rows²) and ran out of memory at 45k formulas. The graph is no longer materialised — §8 |
 > | §12.5 — LibreOffice-vs-Excel divergence is a **financial-function** risk | ✗ Real, but the largest class was **booleans** — §12.5 |
 >
@@ -191,7 +191,7 @@ is therefore whatever an LLM types: `ROUND`, `IFERROR`, `NPV`, `IRR`, `XIRR`,
 `SUMIF`, `INDEX`/`MATCH`, `EOMONTH`, `TEXT`. A `{SUM, IF}` engine would have
 rendered ⚠ on the first real model.
 
-**What replaced it:** 197 implemented functions, chosen for what a generated
+**What replaced it:** 204 implemented functions, chosen for what a generated
 financial model reaches for, with every one of them measured against LibreOffice
 (§12). The closed-grammar *mechanism* survived in a better form —
 `CAPABILITY.md` is generated from the registry and can still be published into
@@ -865,7 +865,7 @@ turned out to be an excuse for a real bug behind 67 cells.
 
 §12.7 used to say corpus breadth was the binding constraint and that widening
 with real output was the highest-value next step. That is now done.
-`eval/real/` is **202,795 formula cells across ten workbooks written by other
+The real corpus is **202,795 formula cells across ten workbooks written by other
 people and other tools** — two Google Sheets budget exports, a 35-sheet board
 pack, four generated models, and a 138,421-formula business plan last saved by
 Microsoft Excel.
@@ -964,7 +964,7 @@ risk when the corpus was built. It is now observed: 28 cells of the board pack
 record `#REF!` for formulas whose referenced cells demonstrably hold the numbers
 we compute — verified independently of the engine by walking the raw XML,
 redoing the MATCH positionally and summing the two or three INDEX terms in each
-formula (`eval/real/verify_index.py`, 26 of 26). The same formula shape resolves
+formula (a one-off script over the raw XML, 26 of 26). The same formula shape resolves
 successfully in 117 other cells of that sheet, so it is not something the writer
 could not do. A file records what an application last computed, not what it
 would compute today.
@@ -1019,7 +1019,7 @@ the floor is wider, and the list is derived rather than hand-written.
 | **0** | Eval harness + raw `t` probe; retire the 0.25 heuristic | ✓ done |
 | **1** | Vocabulary histogram across real agent output | ✗ **not done** — superseded by §2.1, but the underlying need (a real corpus) is now §16's top item |
 | **2** | `formualizer` bake-off | ✗ not run — decided on other grounds (§0) |
-| **3** | Evaluator | ✓ done, broad rather than closed: 197 functions |
+| **3** | Evaluator | ✓ done, broad rather than closed: 204 functions |
 | **4** | Overlay + provenance UI | ✓ done |
 | **5** | Worker + incremental + live edit | ✗ not done (§9.2) |
 | **6** | Audit diff | ✓ done, and extended with the structural detector (§11) |
@@ -1074,7 +1074,7 @@ Superseded by **`CAPABILITY.md`**, generated from the function registry by
 what an engine supports drifts within a week and then actively misleads — which,
 for a fail-loud engine, is the one thing the documentation must not do.
 
-Summary at time of writing: **197 implemented, 26 refused by name**, plus two
+Summary at time of writing: **204 implemented, 26 refused by name**, plus two
 conditional refusals (`SUBTOTAL(101–111)`, and approximate-match lookups over
 unsorted data).
 

@@ -47,7 +47,41 @@ export interface RichRun {
  */
 export type CellContentData =
   | { kind: 'rich'; runs: RichRun[] }
-  | { kind: 'link'; text: string; href: string };
+  /**
+   * A hyperlink. `href` is the target exactly as the file wrote it; `unsafe`
+   * says whether this library is willing to put it in an anchor — see
+   * `isSafeHref`. When it is set, a renderer must show the text and not the
+   * link.
+   */
+  | { kind: 'link'; text: string; href: string; unsafe?: true };
+
+/** Schemes a hyperlink out of a stranger's workbook may navigate to. */
+const SAFE_SCHEMES = new Set(['http', 'https', 'mailto']);
+
+/**
+ * Is this hyperlink target something we will hand to the browser?
+ *
+ * A `.xlsx` can name any target it likes, and `javascript:alert(document.cookie)`
+ * is a legal one. Escaping the URL — which this library did, carefully, at every
+ * insertion point — stops it breaking out of the attribute and does nothing at
+ * all about the scheme: the anchor still runs script in the host's origin on
+ * click. For a viewer whose entire pitch is "open an untrusted spreadsheet
+ * without it leaving your machine", one click is one too many.
+ *
+ * So the check is an allowlist, not a denylist, and it is deliberately strict:
+ *
+ *   - Control characters are stripped before the scheme is read, because
+ *     browsers strip them too — `java\nscript:` is `javascript:` by the time it
+ *     is dispatched, and a naive `startsWith` misses that.
+ *   - A target with no scheme at all is refused as well. In a workbook those are
+ *     relative file paths (`../Q3 actuals.xlsx`), which mean nothing in a
+ *     browser preview, and `//evil.example` is a protocol-relative jump to
+ *     another origin wearing the same clothes.
+ */
+export function isSafeHref(target: string): boolean {
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(target.replace(/[\u0000-\u0020\u007f]/g, ''));
+  return scheme !== null && SAFE_SCHEMES.has(scheme[1]!.toLowerCase());
+}
 
 export interface CellFont {
   bold?: boolean;
@@ -163,13 +197,84 @@ export function mergeMap(layout: SheetLayout): MergeMap {
  * Cumulative pixel offsets, so a frozen row or column can be positioned with
  * `position: sticky`. Both arrays are 1-based and hold the offset *before* the
  * given row or column.
+ *
+ * `upto` bounds the work to what is actually being drawn. A renderer that has
+ * clamped its extent has no use for the offset of row 900,000, and building it
+ * anyway is a million-element array per render on exactly the sheets that can
+ * least afford one.
  */
-export function paneOffsets(layout: SheetLayout): { left: number[]; top: number[] } {
+export function paneOffsets(
+  layout: SheetLayout,
+  upto?: { rows: number; cols: number },
+): { left: number[]; top: number[] } {
+  const nCols = Math.min(layout.cols, upto?.cols ?? layout.cols);
+  const nRows = Math.min(layout.rows, upto?.rows ?? layout.rows);
   const left = [0, 0];
-  for (let c = 1; c <= layout.cols; c++) left[c + 1] = left[c]! + (layout.colWidths[c] ?? 0);
+  for (let c = 1; c <= nCols; c++) left[c + 1] = left[c]! + (layout.colWidths[c] ?? 0);
   const top = [0, 0];
-  for (let r = 1; r <= layout.rows; r++) top[r + 1] = top[r]! + (layout.rowHeights[r] ?? 0);
+  for (let r = 1; r <= nRows; r++) top[r + 1] = top[r]! + (layout.rowHeights[r] ?? 0);
   return { left, top };
+}
+
+/**
+ * How much of a sheet a renderer will actually draw.
+ *
+ * Both renderers paint every cell of the extent into the document — there is no
+ * virtualisation, and adding it is a different piece of work — so the cost is
+ * `rows × cols` whatever the sheet contains. That is fine for a financial model
+ * and fatal for a stray: `ws.rowCount` is the last row with *anything* in it, so
+ * one accidental keystroke in the bottom-right corner of a sheet declares a
+ * 1,048,576 × 16,384 grid. Seventeen billion cells is not a slow render, it is
+ * an out-of-memory crash — measured, at 160 bytes of HTML per cell — and a
+ * viewer that dies on a file is worse than one that admits a limit.
+ *
+ * So the extent is bounded and the renderer *says* it was bounded. Truncating in
+ * silence would be the same failure as a guessed number: the user sees a
+ * complete-looking sheet that is not the sheet.
+ */
+export interface RenderLimits {
+  maxRows: number;
+  maxCols: number;
+  /** Ceiling on `rows × cols`, which is what actually costs. */
+  maxCells: number;
+}
+
+/**
+ * Roughly 150,000 cells: a second of work and tens of megabytes of document, at
+ * the outer edge of what a browser will hold without complaint. Every real
+ * corpus sheet is far below it; a host that knows its files are bigger can pass
+ * its own.
+ */
+export const DEFAULT_RENDER_LIMITS: RenderLimits = {
+  maxRows: 20_000,
+  maxCols: 512,
+  maxCells: 150_000,
+};
+
+export interface RenderExtent {
+  rows: number;
+  cols: number;
+  /** True when the sheet is larger than what is being drawn. */
+  truncated: boolean;
+}
+
+export function renderExtent(layout: SheetLayout, limits?: Partial<RenderLimits>): RenderExtent {
+  const lim = { ...DEFAULT_RENDER_LIMITS, ...limits };
+  const cols = Math.max(1, Math.min(layout.cols, lim.maxCols));
+  const rows = Math.max(1, Math.min(layout.rows, lim.maxRows, Math.floor(lim.maxCells / cols)));
+  return { rows, cols, truncated: rows < layout.rows || cols < layout.cols };
+}
+
+/** Thousands separators without asking the platform what locale it is in. */
+const grouped = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+/** What the renderers put above a grid they had to cut short. Shared, so they agree. */
+export function truncationNote(layout: SheetLayout, extent: RenderExtent): string | undefined {
+  if (!extent.truncated) return undefined;
+  const parts: string[] = [];
+  if (extent.rows < layout.rows) parts.push(`${grouped(extent.rows)} of ${grouped(layout.rows)} rows`);
+  if (extent.cols < layout.cols) parts.push(`${grouped(extent.cols)} of ${grouped(layout.cols)} columns`);
+  return `Showing ${parts.join(' and ')} — the grid is drawn in full, so the rest is not rendered.`;
 }
 
 // Excel stores widths in characters and heights in points; browsers want pixels.
@@ -212,10 +317,15 @@ export function layoutSheet(ws: ExcelJS.Worksheet, opts: LayoutOptions = {}): Sh
     const col = ws.getColumn(c);
     colWidths.push(colPx(col.width, col.hidden));
   }
+  // `findRow` rather than `getRow`: the extent runs to the last row with
+  // *anything* in it, so a stray in the bottom corner makes this loop a million
+  // iterations, and `getRow` materialises a Row object for every one of them.
+  // `findRow` returns undefined for a row that does not exist, which is also the
+  // right answer — it has Excel's default height.
   const rowHeights: number[] = [0];
   for (let r = 1; r <= rows; r++) {
-    const row = ws.getRow(r);
-    rowHeights.push(rowPx(row.height, row.hidden));
+    const row = ws.findRow(r);
+    rowHeights.push(rowPx(row?.height, row?.hidden));
   }
 
   const frozen = (ws.views ?? []).find((v) => v.state === 'frozen') as
@@ -361,7 +471,13 @@ function readContent(value: unknown): CellContentData | undefined {
     return { kind: 'rich', runs };
   }
   if ('hyperlink' in o) {
-    return { kind: 'link', text: String(o.text ?? o.hyperlink), href: String(o.hyperlink) };
+    // Judged here rather than in a renderer, because this is where the file's
+    // bytes become our data: a `SheetLayout` is exported, structured-cloned into
+    // a Worker and handed to third-party renderers, and none of them should have
+    // to know that a spreadsheet can carry a `javascript:` URL.
+    const href = String(o.hyperlink);
+    const text = String(o.text ?? o.hyperlink);
+    return isSafeHref(href) ? { kind: 'link', text, href } : { kind: 'link', text, href, unsafe: true };
   }
   return undefined;
 }

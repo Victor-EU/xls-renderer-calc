@@ -3,6 +3,11 @@ dist/
 *.tsbuildinfo
 .DS_Store
 
+# The engine's build copies the root CAPABILITY.md in beside its dist, so the
+# published tarball carries the list that VERSIONING.md tells consumers to diff.
+# The root copy is the source; this one is an artefact.
+packages/formula-engine/CAPABILITY.md
+
 # oracle harness intermediates — fixtures are regenerated, not committed
 tools/oracle/build/
 tools/oracle/out/
@@ -16,14 +21,17 @@ eval/build/
 eval/__pycache__/
 eval/models/__pycache__/
 
-# The real-data corpus is other people's business workbooks. It is never
-# committed, and neither is anything derived from it that quotes their
-# contents: the per-cell mismatch dump, the inventory (which carries sheet
-# names), and the LibreOffice recalculations. eval/real/REPORT.md *is*
-# committed — it holds counts, timings and function names only, which is what
-# makes a change in behaviour show up as a diff.
+# The real-data corpus is other people's business workbooks: budgets, board
+# packs, a business plan, shared for a technical purpose and not for
+# publication. None of it is committed — not the files, not the harness that
+# reads them, not the report, not the rule file. Earlier revisions of this
+# project kept the report and the scripts, on the reasoning that counts and
+# timings carry nothing confidential; that was true of the numbers and false of
+# the *filenames*, which name the companies. Once the repository went public the
+# whole directory came out, history included.
+#
+# What survives is in the README: the aggregates, and the bugs the corpus found.
+# The two harnesses a reader can actually rerun — the oracle and the synthetic
+# corpus — are both in this repository, which is the point of having three.
 eval/Real data/
-eval/real/recalc/
-eval/real/mismatches.json
-eval/real/inventory.json
-eval/real/__pycache__/
+eval/real/

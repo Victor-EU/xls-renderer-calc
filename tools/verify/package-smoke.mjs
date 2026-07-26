@@ -72,9 +72,27 @@ for (const [subpath, target] of Object.entries(previewPkg.exports)) {
   }
 }
 
+const engineDir = dirname(require.resolve('@xlscalc/formula-engine/package.json'));
 check('LICENSE ships with the package', existsSync(join(previewDir, 'LICENSE')));
-check('the engine ships its LICENSE too',
-  existsSync(join(dirname(require.resolve('@xlscalc/formula-engine/package.json')), 'LICENSE')));
+check('the engine ships its LICENSE too', existsSync(join(engineDir, 'LICENSE')));
+
+// VERSIONING.md makes "diff CAPABILITY.md between two versions" the supported
+// way to see what changed about what renders. That is only true if the file is
+// in the tarball — a doctrine whose mechanism lives in a repository the consumer
+// may never see is not a mechanism.
+const capability = join(engineDir, 'CAPABILITY.md');
+check('the engine ships the capability list it tells you to diff', existsSync(capability));
+if (existsSync(capability)) {
+  const listed = (readFileSync(capability, 'utf8').match(/## Implemented \((\d+)\)/) ?? [])[1];
+  check(`  it lists the ${listed} functions the registry has`,
+    Number(listed) === engine.implementedFunctions().length,
+    `${listed} vs ${engine.implementedFunctions().length}`);
+}
+
+// Source maps that point at files nobody received are worse than none: a
+// debugger stops on a blank frame. The sources ship, so they resolve.
+check('source maps resolve to sources that shipped',
+  existsSync(join(engineDir, 'src/index.ts')) && existsSync(join(previewDir, 'src/index.ts')));
 
 // The stylesheet is not decoration: `⚠` is how a refused cell announces itself,
 // and an unstyled one is a value the user does not notice is missing. So the
