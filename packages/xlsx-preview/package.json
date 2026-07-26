@@ -1,19 +1,48 @@
 {
   "name": "@xlscalc/xlsx-preview",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Client-side, view-only .xlsx preview that computes formula values in the browser.",
+  "keywords": ["excel", "xlsx", "preview", "viewer", "spreadsheet", "react", "recalculate"],
   "license": "MIT",
+  "author": "Victor-EU",
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./view": "./src/view/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./view": {
+      "types": "./dist/view/index.d.ts",
+      "default": "./dist/view/index.js"
+    },
+    "./view/style.css": "./dist/view/style.css",
+    "./worker": {
+      "types": "./dist/worker/index.d.ts",
+      "default": "./dist/worker/index.js"
+    },
+    "./worker/entry": {
+      "types": "./dist/worker/entry.d.ts",
+      "default": "./dist/worker/entry.js"
+    },
+    "./package.json": "./package.json"
   },
-  "files": ["src"],
-  "sideEffects": false,
+  "files": ["dist", "README.md", "LICENSE"],
+  "sideEffects": ["*.css"],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepack": "npm run build",
+    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').copyFileSync('src/view/style.css','dist/view/style.css')\"",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
   "dependencies": {
-    "@xlscalc/formula-engine": "0.1.0",
+    "@xlscalc/formula-engine": "^0.2.0",
     "exceljs": "^4.4.0",
     "fflate": "^0.8.2",
     "numfmt": "^3.2.6"
@@ -22,6 +51,8 @@
     "react": ">=18"
   },
   "peerDependenciesMeta": {
-    "react": { "optional": true }
+    "react": {
+      "optional": true
+    }
   }
 }

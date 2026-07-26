@@ -29,7 +29,8 @@
 import ExcelJS from 'exceljs';
 import { format as numFormat } from 'numfmt';
 import { setNumberFormatter } from '@xlscalc/formula-engine';
-import { bind, type BindOptions, type PreviewModel } from './bind.js';
+import { bind, type BindOptions, type PreviewModel, type RenderSource } from './bind.js';
+import { blankLayout, layoutSheet, type SheetLayout } from './layout.js';
 import { readXlsx, type RawWorkbook } from './ooxml.js';
 
 // TEXT() asks the host for a number formatter rather than shipping its own; the
@@ -47,12 +48,21 @@ export interface SheetInfo {
   uncached: number;
 }
 
-export interface PreviewDocument {
+export interface PreviewDocument extends RenderSource {
+  /**
+   * The ExcelJS parse. Kept for hosts that want something we do not model, but
+   * nothing in this package reads it after `layouts` is built — that is the
+   * point of layout.ts, and a renderer should take `layouts` instead.
+   */
   styled: ExcelJS.Workbook;
   raw: RawWorkbook;
   model: PreviewModel;
+  /** How each sheet looks, as plain data. Index matches `sheets`. */
+  layouts: SheetLayout[];
   sheets: SheetInfo[];
   parseMs: number;
+  /** Time spent reading appearance out of the styled parse. */
+  layoutMs: number;
   evalMs: number;
   /**
    * Set when the styling pass failed and the document is being shown with
@@ -84,11 +94,26 @@ export async function loadXlsx(buf: ArrayBuffer, opts: LoadOptions = {}): Promis
   const model = bind(raw, opts);
   const evalMs = now() - t1;
 
-  // The engine's sheet order comes from workbook.xml, which is also the order
-  // ExcelJS reports, but they are matched by name so a mismatch cannot silently
-  // shift every cross-sheet reference by one.
-  const sheets: SheetInfo[] = raw.sheets.map((sheet, index) => {
+  // Appearance is read once, here, rather than on every render. The renderer
+  // used to walk the ExcelJS worksheet itself, which meant one `getCell()` per
+  // coordinate per React render; a wide sheet made that tens of thousands of
+  // lookups per keystroke. Doing it at load also makes the result plain data,
+  // which is what lets the whole pipeline move into a Worker.
+  const t2 = now();
+  const layouts: SheetLayout[] = raw.sheets.map((sheet, index) => {
+    // Matched by name, with an index fallback, because the engine's sheet order
+    // (workbook.xml) and ExcelJS's can disagree — and a silent off-by-one here
+    // would render one sheet's numbers over another's formatting.
     const ws = styled.getWorksheet(sheet.name) ?? styled.worksheets[index];
+    const minRows = maxOf(sheet.cells, (c) => c.row);
+    const minCols = maxOf(sheet.cells, (c) => c.col);
+    return ws
+      ? layoutSheet(ws, { name: sheet.name, minRows, minCols })
+      : blankLayout(sheet.name, minRows, minCols);
+  });
+  const layoutMs = now() - t2;
+
+  const sheets: SheetInfo[] = raw.sheets.map((sheet, index) => {
     let formulas = 0;
     let uncached = 0;
     for (const cell of sheet.cells) {
@@ -97,11 +122,12 @@ export async function loadXlsx(buf: ArrayBuffer, opts: LoadOptions = {}): Promis
       const rec = model.engine.record(index, cell.row, cell.col);
       if (rec?.cached === undefined) uncached++;
     }
+    const layout = layouts[index]!;
     return {
       name: sheet.name,
       index,
-      rows: Math.max(ws?.rowCount ?? 0, maxOf(sheet.cells, (c) => c.row)),
-      cols: Math.max(ws?.columnCount ?? 0, maxOf(sheet.cells, (c) => c.col)),
+      rows: layout.rows,
+      cols: layout.cols,
       cells: sheet.cells.length,
       formulas,
       uncached,
@@ -112,8 +138,10 @@ export async function loadXlsx(buf: ArrayBuffer, opts: LoadOptions = {}): Promis
     styled,
     raw,
     model,
+    layouts,
     sheets,
     parseMs: Math.round(parseMs),
+    layoutMs: Math.round(layoutMs),
     evalMs: Math.round(evalMs),
     ...(stylesError === undefined ? {} : { stylesError }),
   };

@@ -3,7 +3,20 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    // Point at the sources, matching the Vite aliases. Without this the demo
+    // typechecks against whatever `dist/` happens to hold, which means a
+    // breaking API change looks fine until someone rebuilds — the demo is meant
+    // to be the first thing that notices, not the last.
+    "paths": {
+      "@xlscalc/formula-engine": ["../../packages/formula-engine/src/index.ts"],
+      "@xlscalc/xlsx-preview": ["../../packages/xlsx-preview/src/index.ts"],
+      "@xlscalc/xlsx-preview/view": ["../../packages/xlsx-preview/src/view/index.ts"],
+      "@xlscalc/xlsx-preview/worker": ["../../packages/xlsx-preview/src/worker/index.ts"]
+    }
   },
-  "include": ["src", "vite.config.ts"]
+  // `../../examples` rides along so the README quickstart is typechecked with
+  // the same aliases. A snippet that no longer compiles is the worst kind of
+  // documentation rot: it is the first thing anyone runs.
+  "include": ["src", "vite.config.ts", "../../examples/**/*.tsx"]
 }

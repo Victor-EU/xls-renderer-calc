@@ -333,7 +333,7 @@ class Parser {
     for (;;) {
       // Omitted arguments are legal and meaningful: IF(A1,,2), OFFSET(A1,1,).
       const t = this.peek();
-      if (t.type === 'comma' || t.type === 'rparen') args.push({ k: 'name', name: ' missing' });
+      if (t.type === 'comma' || t.type === 'rparen') args.push({ k: 'name', name: MISSING_ARG });
       else args.push(this.parseExpr(0));
 
       const sep = this.take();
@@ -400,7 +400,10 @@ export function normalizeFnName(raw: string): string {
 }
 
 /** The sentinel an omitted argument parses to — `IF(A1,,2)`. */
-export const MISSING_ARG = ' missing';
+// Written as an escape, not as a literal NUL byte: an actual 0x00 in the
+// source makes the file 'binary' to grep, diff and half of CI, which is a
+// strange thing for a parser to be.
+export const MISSING_ARG = '\0missing';
 export const isMissing = (n: Node): boolean => n.k === 'name' && n.name === MISSING_ARG;
 
 /**

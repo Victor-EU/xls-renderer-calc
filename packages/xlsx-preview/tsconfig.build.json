@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    // Resolve @xlscalc/formula-engine the way a consumer will — through the
+    // workspace symlink into its published `exports`, not through the source
+    // `paths` alias the editor uses. If the engine's declaration output is
+    // wrong, this build is where it surfaces rather than in someone's app.
+    "paths": {}
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
+}

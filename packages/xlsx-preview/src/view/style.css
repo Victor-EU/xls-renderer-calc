@@ -1,0 +1,72 @@
+/*
+ * @xlscalc/xlsx-preview — styles for the rendered grid.
+ *
+ *   import '@xlscalc/xlsx-preview/view/style.css';
+ *
+ * This file is required, not decorative. `⚠` is how the renderer says it
+ * refused to compute a cell, and without these rules it is unstyled text the
+ * eye slides past — which turns the one guarantee this library makes into
+ * something the user cannot see. Everything a host is likely to want to change
+ * is a custom property with a working default, so restyling should never mean
+ * copying these selectors.
+ *
+ * There is deliberately no `prefers-color-scheme` rule. A workbook carries its
+ * own colours — fills and font colours come out of the file and are applied per
+ * cell — so flipping the page to a dark background leaves black-on-black text
+ * wherever the author set one explicitly. Dark mode is a decision about the
+ * document, not about the widget, so it is left to the host.
+ */
+
+.xl-table {
+  /* `separate` rather than `collapse` so sticky frozen panes keep their borders
+     — with collapse, borders belong to the table and scroll away from the cell. */
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  background: var(--xl-paper, #ffffff);
+  color: var(--xl-ink, #16202e);
+  font-family: var(--xl-font, Calibri, "Segoe UI", system-ui, sans-serif);
+}
+
+.xl-table td {
+  padding: var(--xl-cell-padding, 1px 4px);
+  font-size: var(--xl-font-size, 12px);
+  max-width: var(--xl-max-cell-width, 520px);
+}
+
+.xl-table a {
+  color: var(--xl-link, #0563c1);
+}
+
+/* The refusal marker. It has to read as "no value here, deliberately" at a
+   glance, next to cells that do carry numbers. */
+.xl-unsupported {
+  color: var(--xl-warn, #b26a00);
+  cursor: help;
+  font-weight: 600;
+}
+
+/*
+ * The three state classes below all need `!important`, and it is not laziness:
+ * the file's own fills and borders arrive as inline styles on the same <td>,
+ * and an inline style beats any selector. These marks are the renderer telling
+ * you something about the value, so they have to win over the document's
+ * decoration rather than lose to it.
+ */
+
+/* Cells the engine computed itself, when provenance display is on. */
+.xl-computed {
+  border-left: var(--xl-computed-edge, 2px solid rgba(70, 140, 90, 0.55)) !important;
+}
+
+/* The file's cached value disagrees with the computed one, or the audit pass
+   flagged a literal that its neighbours contradict. */
+.xl-mismatch {
+  outline: var(--xl-mismatch-outline, 2px solid #d94a4a) !important;
+  outline-offset: -2px;
+}
+
+/* Precedents of the selected cell. */
+.xl-highlight {
+  background: var(--xl-highlight, rgba(84, 140, 255, 0.18)) !important;
+}

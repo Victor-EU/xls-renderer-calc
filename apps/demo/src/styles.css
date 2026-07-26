@@ -226,24 +226,13 @@ body {
   max-height: 68vh;
 }
 
-/* `separate` rather than `collapse` so sticky frozen panes keep their borders —
-   with collapse, borders belong to the table and scroll away from the cell. */
+/* The grid's own rules ship with the package (`@xlscalc/xlsx-preview/view/style.css`,
+   imported in main.tsx). All the demo does is point its custom properties at the
+   app palette — which is the whole restyling story a consumer needs. */
 .xl-table {
-  border-collapse: separate;
-  border-spacing: 0;
-  table-layout: fixed;
-  background: var(--paper);
-}
-
-.xl-table td {
-  padding: 1px 4px;
-  font-size: 12px;
-  max-width: 520px;
-}
-
-.xl-unsupported {
-  color: var(--warn);
-  cursor: help;
+  --xl-paper: var(--paper);
+  --xl-ink: var(--ink);
+  --xl-warn: var(--warn);
 }
 
 .inspector {

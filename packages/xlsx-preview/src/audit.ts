@@ -23,7 +23,7 @@
  */
 
 import { unparse, Workbook, type Node, type Scalar } from '@xlscalc/formula-engine';
-import { plainText } from './view/format.js';
+import { plainText } from './format.js';
 
 export interface HardcodedFinding {
   sheet: number;

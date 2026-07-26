@@ -120,6 +120,36 @@ check(
   differing.length ? `\n      ${differing.slice(0, 10).join('\n      ')}` : '',
 );
 
+// Loading now happens in a Worker, which means the engine is no longer on this
+// thread and tracing what a cell reads is a round trip rather than a call. That
+// round trip is the one part of the off-thread arrangement with no test above
+// it: if it silently returned nothing, every check so far would still pass and
+// the inspector would just quietly stop saying "reads …".
+console.log('\n── precedents, traced through the worker');
+await show('Financial model (recalculated)');
+const traced = await page.evaluate(async () => {
+  // Click cells until one turns out to have precedents — most do not.
+  const cells = [...document.querySelectorAll('.xl-table td')];
+  for (const td of cells) {
+    if (!td.title?.startsWith('=')) continue;
+    td.click();
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+      const text = document.querySelector('.inspector')?.textContent ?? '';
+      if (text.includes('reads')) return { formula: td.title.split('\n')[0], text };
+    }
+  }
+  return null;
+});
+check(
+  'a selected formula cell reports the cells it reads',
+  traced !== null,
+  traced ? `${traced.formula} → ${traced.text.split('reads')[1]?.trim().slice(0, 80)}` : 'no cell reported precedents',
+);
+
+const highlighted = await page.locator('.xl-highlight').count();
+check('and those cells are highlighted in the grid', highlighted > 0, `${highlighted} highlighted`);
+
 // The audit case: the hardcoded Q4 total must be reported, not smoothed over.
 console.log('\n── audit diff');
 await show('Hardcoded total (audit demo)');

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { loadXlsx, type PreviewDocument } from '@xlscalc/xlsx-preview';
+import type { RestoredDocument } from '@xlscalc/xlsx-preview';
+import { createPreviewWorker } from '@xlscalc/xlsx-preview/worker';
 import { ExcelView, plainText } from '@xlscalc/xlsx-preview/view';
 
 /**
@@ -9,7 +10,22 @@ import { ExcelView, plainText } from '@xlscalc/xlsx-preview/view';
  * "this file needs a recalc — 75 cells render blank", which was a diagnosis the
  * user could do nothing about. It now says what was computed, how long it took,
  * and — the part that matters — what could *not* be computed.
+ *
+ * Loading runs in a Worker. Nothing here needs it to at these sizes, and that is
+ * rather the point: the off-thread path is the one a product would ship, so it
+ * is the one the demo exercises. The largest workbook of the real corpus spends
+ * seven and a half seconds in that call, and a preview that freezes the tab for
+ * seven seconds is not a preview.
+ *
+ * The only thing it costs is that `precedents` becomes a question rather than a
+ * property: the engine stays in the worker, so tracing what a cell reads is an
+ * await instead of a call.
  */
+
+type Cell = { row: number; col: number };
+type Precedent = { sheet: number; row: number; col: number };
+
+const preview = createPreviewWorker();
 
 const SAMPLES = [
   { label: 'Financial model (recalculated)', file: 'financial-model.xlsx' },
@@ -19,7 +35,7 @@ const SAMPLES = [
 ];
 
 export default function App() {
-  const [doc, setDoc] = useState<PreviewDocument | null>(null);
+  const [doc, setDoc] = useState<RestoredDocument | null>(null);
   const [name, setName] = useState('');
   const [active, setActive] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -29,13 +45,14 @@ export default function App() {
   const [zoom, setZoom] = useState(1);
   const [showProvenance, setShowProvenance] = useState(false);
   const [diffMode, setDiffMode] = useState(false);
-  const [selected, setSelected] = useState<{ row: number; col: number } | null>(null);
+  const [selected, setSelected] = useState<Cell | null>(null);
+  const [precedents, setPrecedents] = useState<Precedent[]>([]);
 
   const open = useCallback(async (buf: ArrayBuffer, label: string) => {
     setBusy(true);
     setError(null);
     try {
-      const next = await loadXlsx(buf);
+      const next = await preview.load(buf);
       setDoc(next);
       setName(label);
       setActive(0);
@@ -73,11 +90,33 @@ export default function App() {
     [open],
   );
 
-  const highlight = useMemo(() => {
-    if (!doc || !selected) return undefined;
-    const cells = doc.model.engine.precedents(active, selected.row, selected.col);
-    return new Set(cells.filter((c) => c.sheet === active).map((c) => `${c.row}:${c.col}`));
+  // The engine lives in the worker, so this is a round trip. `live` guards
+  // against a stale reply landing after the selection has already moved on.
+  useEffect(() => {
+    if (!doc || !selected) {
+      setPrecedents([]);
+      return;
+    }
+    let live = true;
+    void preview
+      .precedents(active, selected.row, selected.col)
+      .then((cells) => {
+        if (live) setPrecedents(cells);
+      })
+      .catch(() => {
+        if (live) setPrecedents([]);
+      });
+    return () => {
+      live = false;
+    };
   }, [doc, selected, active]);
+
+  const highlight = useMemo(() => {
+    if (!selected) return undefined;
+    return new Set(
+      precedents.filter((c) => c.sheet === active).map((c) => `${c.row}:${c.col}`),
+    );
+  }, [precedents, selected, active]);
 
   const flagged = useMemo(() => {
     if (!doc) return undefined;
@@ -85,7 +124,6 @@ export default function App() {
   }, [doc, active]);
 
   const sheet = doc?.sheets[active];
-  const worksheet = doc && sheet ? (doc.styled.getWorksheet(sheet.name) ?? doc.styled.worksheets[active]) : undefined;
   const stats = doc?.model.report.stats;
 
   return (
@@ -235,11 +273,10 @@ export default function App() {
           )}
 
           <div className="sheet">
-            {worksheet && (
+            {sheet && (
               <ExcelView
-                worksheet={worksheet}
-                model={doc.model}
-                sheetIndex={active}
+                doc={doc}
+                sheet={active}
                 gridlines={gridlines}
                 zoom={zoom}
                 showProvenance={showProvenance}
@@ -251,7 +288,9 @@ export default function App() {
             )}
           </div>
 
-          {selected && <Inspector doc={doc} sheet={active} selected={selected} />}
+          {selected && (
+            <Inspector doc={doc} sheet={active} selected={selected} precedents={precedents} />
+          )}
         </>
       )}
 
@@ -272,13 +311,15 @@ function Inspector({
   doc,
   sheet,
   selected,
+  precedents: all,
 }: {
-  doc: PreviewDocument;
+  doc: RestoredDocument;
   sheet: number;
-  selected: { row: number; col: number };
+  selected: Cell;
+  precedents: Precedent[];
 }) {
   const cell = doc.model.cell(sheet, selected.row, selected.col);
-  const precedents = doc.model.engine.precedents(sheet, selected.row, selected.col, 24);
+  const precedents = all.slice(0, 24);
   const address = `${colName(selected.col)}${selected.row}`;
   if (!cell) return <div className="inspector">{address} — empty</div>;
 

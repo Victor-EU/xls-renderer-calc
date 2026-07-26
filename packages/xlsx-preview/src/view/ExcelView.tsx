@@ -1,15 +1,21 @@
 import { Fragment, type CSSProperties, type ReactNode } from 'react';
-import type ExcelJS from 'exceljs';
-import type { PreviewModel } from '../bind.js';
-import { plainText, resolveContent, type CellContent } from './format.js';
-import { resolveColor } from './theme.js';
+import { cellCss } from '../css.js';
+import { plainText, resolveContent, type CellContent } from '../format.js';
+import { layoutKey, mergeMap, paneOffsets, type CellStyle } from '../layout.js';
+import type { OverlayCell, RenderModel, RenderSource } from '../bind.js';
 
 /**
- * The renderer: one ExcelJS worksheet plus the engine's value overlay, painted
- * as a styled HTML table. Number formats, theme and indexed colours, fills,
- * fonts, borders, alignment, merged cells, frozen-pane sticky headers, rich text
- * and hyperlinks all come from the styled parse; every *value* comes from the
- * overlay.
+ * The renderer: a sheet's layout plus the engine's value overlay, painted as a
+ * styled HTML table. Number formats, colours, fills, fonts, borders, alignment,
+ * merged cells, frozen-pane sticky headers, rich text and hyperlinks all come
+ * from the layout; every *value* comes from the overlay.
+ *
+ * It takes a loaded document and a sheet index, and nothing else is required.
+ * It used to take an `ExcelJS.Worksheet`, which meant every caller installed
+ * ExcelJS, imported its types, and had to know that the worksheet must be
+ * looked up by name with an index fallback because the two orders can disagree.
+ * That was our implementation detail leaking into their call site; see
+ * layout.ts.
  *
  * The provenance of each value is visible rather than implied:
  *   computed    a thin left edge tint, off by default
@@ -18,41 +24,18 @@ import { resolveColor } from './theme.js';
  *   mismatch    outlined when diff mode is on: the file's cached value and our
  *               computed one disagree, which in a generated model usually means
  *               a total was hardcoded rather than summed.
+ *
+ * The marks are class names, not inline styles, so a host can restyle them —
+ * see view/style.css, which must be imported for any of this to be visible.
  */
 
-const BORDER_W: Record<string, string> = {
-  hair: '1px solid',
-  thin: '1px solid',
-  dotted: '1px dotted',
-  dashed: '1px dashed',
-  medium: '2px solid',
-  thick: '3px solid',
-  double: '3px double',
-};
-
-function borderCss(side: unknown): string | undefined {
-  if (!side || typeof side !== 'object') return undefined;
-  const s = side as { style?: string; color?: unknown };
-  if (!s.style) return undefined;
-  return `${BORDER_W[s.style] ?? '1px solid'} ${resolveColor(s.color) ?? '#c9d2e0'}`;
-}
-
-const colPx = (w?: number, hidden?: boolean): number => (hidden ? 0 : Math.round((w ?? 8.43) * 7 + 5));
-const rowPx = (h?: number, hidden?: boolean): number => (hidden ? 0 : Math.round((h ?? 15) * (96 / 72)));
-
-function decodeRange(range: string): { l: number; t: number; r: number; b: number } {
-  const [a, b] = range.split(':');
-  const m1 = /([A-Z]+)(\d+)/.exec(a!)!;
-  const m2 = /([A-Z]+)(\d+)/.exec(b ?? a!)!;
-  const col = (s: string): number => s.split('').reduce((n, ch) => n * 26 + (ch.charCodeAt(0) - 64), 0);
-  return { l: col(m1[1]!), t: Number(m1[2]), r: col(m2[1]!), b: Number(m2[2]) };
-}
+const EMPTY_STYLE: CellStyle = {};
 
 export interface ExcelViewProps {
-  worksheet: ExcelJS.Worksheet;
-  model: PreviewModel;
-  /** Index of this sheet in the engine — matched by name at load time. */
-  sheetIndex: number;
+  /** A loaded document: `loadXlsx(…)`, or the result of the worker path. */
+  doc: RenderSource;
+  /** Which sheet to render, by index into `doc.layouts`. */
+  sheet: number;
   gridlines?: boolean;
   zoom?: number;
   /** Tint cells we computed, so it is obvious which numbers were not in the file. */
@@ -71,9 +54,8 @@ export interface ExcelViewProps {
 }
 
 export default function ExcelView({
-  worksheet: ws,
-  model,
-  sheetIndex,
+  doc,
+  sheet: sheetIndex,
   gridlines = false,
   zoom = 1,
   showProvenance = false,
@@ -82,66 +64,27 @@ export default function ExcelView({
   highlight,
   onSelect,
 }: ExcelViewProps): ReactNode {
-  const nCols = Math.max(1, ws.columnCount);
-  const nRows = Math.max(1, ws.rowCount);
+  const layout = doc.layouts[sheetIndex];
+  if (!layout) return null;
+  const model = doc.model;
 
-  const widths: number[] = [0];
-  for (let c = 1; c <= nCols; c++) {
-    const col = ws.getColumn(c);
-    widths.push(colPx(col.width, col.hidden));
-  }
-  const heights: number[] = [0];
-  for (let r = 1; r <= nRows; r++) {
-    const row = ws.getRow(r);
-    heights.push(rowPx(row.height, row.hidden));
-  }
-
-  // Frozen panes become sticky rows/columns, with cumulative offsets.
-  const view = (ws.views ?? []).find((v) => v.state === 'frozen') as
-    | { xSplit?: number; ySplit?: number }
-    | undefined;
-  const xSplit = view?.xSplit ?? 0;
-  const ySplit = view?.ySplit ?? 0;
-  const leftOff: number[] = [0, 0];
-  for (let c = 1; c <= nCols; c++) leftOff[c + 1] = leftOff[c]! + widths[c]!;
-  const topOff: number[] = [0, 0];
-  for (let r = 1; r <= nRows; r++) topOff[r + 1] = topOff[r]! + heights[r]!;
-
-  const spans = new Map<string, { rs: number; cs: number }>();
-  const covered = new Set<string>();
-  const merges = (ws.model as unknown as { merges?: string[] }).merges ?? [];
-  for (const range of merges) {
-    const { t, l, b, r } = decodeRange(range);
-    spans.set(`${t}:${l}`, { rs: b - t + 1, cs: r - l + 1 });
-    for (let rr = t; rr <= b; rr++) {
-      for (let cc = l; cc <= r; cc++) if (!(rr === t && cc === l)) covered.add(`${rr}:${cc}`);
-    }
-  }
+  const { rows: nRows, cols: nCols, colWidths, rowHeights } = layout;
+  const merges = mergeMap(layout);
+  const offsets = paneOffsets(layout);
 
   const rows: ReactNode[] = [];
   for (let r = 1; r <= nRows; r++) {
-    const row = ws.getRow(r);
     const cells: ReactNode[] = [];
     for (let c = 1; c <= nCols; c++) {
-      if (covered.has(`${r}:${c}`)) continue;
-      const styledCell = row.getCell(c);
+      if (merges.covered(r, c)) continue;
+      const key = layoutKey(r, c);
+      const style = layout.styles[layout.styleAt.get(key) ?? 0] ?? EMPTY_STYLE;
       const overlay = model.cell(sheetIndex, r, c);
       const content = resolveContent(overlay, {
-        numFmt: styledCell.numFmt,
+        numFmt: style.numFmt,
         date1904: model.facts.date1904,
-        styled: styledCell.value,
+        content: layout.content.get(key),
       });
-
-      const font = (styledCell.font ?? {}) as Record<string, unknown>;
-      const fill = styledCell.fill as { type?: string; pattern?: string; fgColor?: unknown } | undefined;
-      const align = styledCell.alignment ?? {};
-      const bd = styledCell.border ?? {};
-      const span = spans.get(`${r}:${c}`);
-
-      const bg = fill?.type === 'pattern' && fill.pattern === 'solid' ? resolveColor(fill.fgColor) : undefined;
-      const stickyL = c <= xSplit;
-      const stickyT = r <= ySplit;
-      const g = gridlines ? '1px solid #e8ecf4' : undefined;
 
       const mismatched =
         diffMode &&
@@ -149,45 +92,30 @@ export default function ExcelView({
           overlay.provenance === 'computed' &&
           plainText(overlay.cached) !== plainText(overlay.value)) ||
           (flagged?.has(`${r}:${c}`) ?? false));
-      const computed = showProvenance && overlay?.provenance === 'computed';
-      const isHighlighted = highlight?.has(`${r}:${c}`) ?? false;
 
-      const st: CSSProperties = {
-        fontWeight: font.bold ? 700 : 400,
-        fontStyle: font.italic ? 'italic' : undefined,
-        textDecoration: font.underline ? 'underline' : undefined,
-        fontSize: font.size ? `${font.size as number}px` : undefined,
-        fontFamily: font.name ? `${font.name as string}, Calibri, sans-serif` : undefined,
-        color: contentColor(content) ?? resolveColor(font.color),
-        background: isHighlighted
-          ? 'rgba(84,140,255,0.18)'
-          : (bg ?? (stickyL || stickyT ? '#fff' : undefined)),
-        textAlign:
-          (align.horizontal as CSSProperties['textAlign']) ??
-          (content.kind === 'text' && content.numeric ? 'right' : undefined),
-        verticalAlign: align.vertical === 'top' ? 'top' : align.vertical === 'bottom' ? 'bottom' : 'middle',
-        whiteSpace: align.wrapText ? 'normal' : 'nowrap',
-        wordBreak: align.wrapText ? 'break-word' : undefined,
-        overflow: 'hidden',
-        borderTop: borderCss(bd.top) ?? g,
-        borderBottom: borderCss(bd.bottom) ?? g,
-        borderLeft: computed ? '2px solid rgba(70,140,90,0.55)' : (borderCss(bd.left) ?? g),
-        borderRight: borderCss(bd.right) ?? g,
-        outline: mismatched ? '2px solid #d94a4a' : undefined,
-        outlineOffset: mismatched ? '-2px' : undefined,
-        position: stickyL || stickyT ? 'sticky' : undefined,
-        left: stickyL ? leftOff[c] : undefined,
-        top: stickyT ? topOff[r] : undefined,
-        zIndex: stickyL && stickyT ? 6 : stickyT ? 5 : stickyL ? 4 : undefined,
-        cursor: onSelect ? 'cell' : undefined,
-      };
+      const marks: string[] = [];
+      if (showProvenance && overlay?.provenance === 'computed') marks.push('xl-computed');
+      if (mismatched) marks.push('xl-mismatch');
+      if (highlight?.has(`${r}:${c}`)) marks.push('xl-highlight');
+
+      const span = merges.span(r, c);
+      const color = contentColor(content);
+      const css = cellCss(style, {
+        gridlines,
+        numeric: content.kind === 'text' && content.numeric === true,
+        ...(color === undefined ? {} : { color }),
+        ...(c <= layout.frozenCols ? { stickyLeft: offsets.left[c]! } : {}),
+        ...(r <= layout.frozenRows ? { stickyTop: offsets.top[r]! } : {}),
+        selectable: onSelect !== undefined,
+      }) as CSSProperties;
 
       cells.push(
         <td
           key={c}
-          style={st}
-          rowSpan={span?.rs}
-          colSpan={span?.cs}
+          className={marks.length > 0 ? marks.join(' ') : undefined}
+          style={css}
+          rowSpan={span?.rows}
+          colSpan={span?.cols}
           title={tooltip(overlay, content)}
           onClick={onSelect ? () => onSelect({ row: r, col: c }) : undefined}
         >
@@ -196,14 +124,14 @@ export default function ExcelView({
       );
     }
     rows.push(
-      <tr key={r} style={{ height: heights[r] }}>
+      <tr key={r} style={{ height: rowHeights[r] }}>
         {cells}
       </tr>,
     );
   }
 
   const cols: ReactNode[] = [];
-  for (let c = 1; c <= nCols; c++) cols.push(<col key={c} style={{ width: widths[c] }} />);
+  for (let c = 1; c <= nCols; c++) cols.push(<col key={c} style={{ width: colWidths[c] }} />);
 
   return (
     <div style={{ transform: `scale(${zoom})`, transformOrigin: 'top left', width: 'fit-content' }}>
@@ -221,7 +149,7 @@ function contentColor(c: CellContent): string | undefined {
   return undefined;
 }
 
-function tooltip(overlay: ReturnType<PreviewModel['cell']>, content: CellContent): string | undefined {
+function tooltip(overlay: OverlayCell | undefined, content: CellContent): string | undefined {
   if (!overlay) return undefined;
   const lines: string[] = [];
   if (overlay.formula) lines.push(`=${overlay.formula.replace(/^=/, '')}`);
@@ -269,3 +197,5 @@ function renderContent(c: CellContent): ReactNode {
       return c.text;
   }
 }
+
+export type { RenderModel, RenderSource };

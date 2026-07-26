@@ -11,6 +11,7 @@
 import { ERR, errorOf, Workbook, type Scalar } from '@xlscalc/formula-engine';
 import type { EvalReport, Provenance } from '@xlscalc/formula-engine';
 import { findHardcoded, type HardcodedFinding } from './audit.js';
+import type { SheetLayout } from './layout.js';
 import type { RawCell, RawWorkbook } from './ooxml.js';
 
 export interface OverlayCell {
@@ -34,14 +35,35 @@ export interface FileFacts {
   hasCalcChain: boolean;
 }
 
-export interface PreviewModel {
-  engine: Workbook;
+/**
+ * What a renderer actually needs from a model: the values, and the one fact
+ * (`date1904`) that decides how a serial becomes a date.
+ *
+ * It is separate from `PreviewModel` because of the Worker. A live `Workbook`
+ * cannot cross a `postMessage`, so the off-thread path returns a model that has
+ * everything below and no `engine`. Typing the renderer against this instead of
+ * against the full model is what lets one component serve both paths.
+ */
+export interface RenderModel {
   report: EvalReport;
   facts: FileFacts;
   sheetNames: string[];
   /** Literal cells whose neighbours' formulas disagree with them — see audit.ts. */
   hardcoded: HardcodedFinding[];
   cell(sheet: number, row: number, col: number): OverlayCell | undefined;
+}
+
+export interface PreviewModel extends RenderModel {
+  engine: Workbook;
+}
+
+/**
+ * The minimum a renderer takes: how each sheet looks, and what each cell holds.
+ * Both `PreviewDocument` and the Worker's revived result satisfy it.
+ */
+export interface RenderSource {
+  layouts: SheetLayout[];
+  model: RenderModel;
 }
 
 export interface BindOptions {

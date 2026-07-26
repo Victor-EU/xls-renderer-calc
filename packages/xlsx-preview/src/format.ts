@@ -14,17 +14,10 @@
 
 import { format as numFormat, formatColor } from 'numfmt';
 import { isErr, serialToDate, type Scalar } from '@xlscalc/formula-engine';
-import type { OverlayCell } from '../bind.js';
-import { resolveColor } from './theme.js';
+import type { OverlayCell } from './bind.js';
+import type { CellContentData, RichRun } from './layout.js';
 
-export type RichRun = {
-  text: string;
-  bold?: boolean;
-  italic?: boolean;
-  color?: string;
-  size?: number;
-  name?: string;
-};
+export type { RichRun };
 
 export type CellContent =
   | { kind: 'empty' }
@@ -85,35 +78,16 @@ function generalText(value: number): string {
 export interface ResolveOptions {
   numFmt?: string;
   date1904?: boolean;
-  /** ExcelJS value, used only for rich text and hyperlinks, which carry no number. */
-  styled?: unknown;
+  /**
+   * Rich text or a hyperlink for this cell, from the layout. Both are
+   * presentation rather than computation — they carry no number — so they win
+   * over the value and never come from the engine.
+   */
+  content?: CellContentData;
 }
 
 export function resolveContent(cell: OverlayCell | undefined, opts: ResolveOptions = {}): CellContent {
-  const styled = opts.styled;
-
-  // Rich text and hyperlinks are presentation, not computation; they come from
-  // the styled parse and never from the engine.
-  if (styled && typeof styled === 'object') {
-    const o = styled as Record<string, unknown>;
-    if ('richText' in o) {
-      const runs = (o.richText as Array<{ text: string; font?: Record<string, unknown> }>).map((r) => {
-        const f = (r.font ?? {}) as Record<string, unknown>;
-        return {
-          text: r.text,
-          bold: f.bold as boolean | undefined,
-          italic: f.italic as boolean | undefined,
-          size: f.size as number | undefined,
-          name: f.name as string | undefined,
-          color: resolveColor(f.color),
-        };
-      });
-      return { kind: 'rich', runs };
-    }
-    if ('hyperlink' in o) {
-      return { kind: 'link', text: String(o.text ?? o.hyperlink), href: String(o.hyperlink) };
-    }
-  }
+  if (opts.content) return opts.content;
 
   if (!cell) return { kind: 'empty' };
 

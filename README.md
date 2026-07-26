@@ -31,13 +31,63 @@ recalc.
 
 ```
 npm install
-npm test                       # engine + oracle + eval corpus
+npm run verify                 # typecheck, test, build, and smoke the published packages
 npm run dev                    # the preview at http://localhost:5176
 python3 tools/oracle/generate.py   # rebuild oracle fixtures (needs LibreOffice)
 python3 eval/build.py              # rebuild the eval corpus (needs LibreOffice)
 npm run eval:real                  # the real-workbook corpus, if you have one
 node tools/verify/drive.mjs        # end-to-end check in a real browser
 ```
+
+---
+
+## Using it
+
+Two packages, published separately, MIT.
+
+```bash
+npm install @xlscalc/xlsx-preview          # load, compute, render
+npm install @xlscalc/formula-engine        # just the evaluator, zero dependencies
+```
+
+```tsx
+import { loadXlsx } from '@xlscalc/xlsx-preview';
+import { ExcelView } from '@xlscalc/xlsx-preview/view';
+import '@xlscalc/xlsx-preview/view/style.css';   // required: ⚠ is invisible without it
+
+const doc = await loadXlsx(await file.arrayBuffer());
+<ExcelView doc={doc} sheet={0} />
+```
+
+For a workbook of any size, run it off the main thread — same component, same
+props:
+
+```ts
+import { createPreviewWorker } from '@xlscalc/xlsx-preview/worker';
+const doc = await createPreviewWorker().load(await file.arrayBuffer());
+```
+
+And before committing to any of it, ask what will be refused. This parses every
+formula but evaluates nothing and never loads the styling dependency — 0.8 s
+where a full load of the same file takes 7.5:
+
+```ts
+import { inspectXlsx } from '@xlscalc/xlsx-preview';
+const { fullyCovered, unsupported, iterative } = inspectXlsx(buf);
+```
+
+There is also `renderToHtml(doc, sheet)` for hosts that are not React, and
+`examples/node-headless.mjs` for servers. Per-package documentation is in
+[packages/xlsx-preview](./packages/xlsx-preview/README.md) and
+[packages/formula-engine](./packages/formula-engine/README.md); release policy —
+including why adding a function is a breaking change to what appears on screen —
+is in [VERSIONING.md](./VERSIONING.md).
+
+**The number to know before adopting: about 36% of formula cells in the real
+corpus render ⚠.** Almost none of that is a missing function; refusal
+propagates, so in the worst workbook 204 cells using `OFFSET` and `CELL` left
+64,809 warning. Whether that is acceptable depends on your files, which is what
+`inspectXlsx` is for. On the cells it does answer, agreement is 100%.
 
 ---
 
@@ -69,15 +119,22 @@ Two corollaries that are easy to get wrong and are enforced in the code:
 
 ```
 packages/formula-engine   zero-dependency Excel formula parser + evaluator
-packages/xlsx-preview     xlsx binding, value overlay, audit pass, React renderer
-apps/demo                 the preview app on :5176
+packages/xlsx-preview     xlsx binding, value overlay, layout, audit pass, renderers
+apps/demo                 the preview app on :5176 — loads through the Worker
+examples                  server-side script and the typechecked README quickstart
 tools/oracle              LibreOffice differential harness + sample generators
-tools/verify              real-browser end-to-end and screenshot drivers
+tools/verify              real-browser end-to-end, screenshots, published-package smoke
 ```
 
 `formula-engine` has **no dependencies at all** and runs in Node, a worker or the
 browser. `xlsx-preview` adds ExcelJS (styles), numfmt (number formats) and fflate
 (unzip) — all MIT.
+
+Inside `xlsx-preview` the boundary that matters is `layout.ts`: it reads a
+sheet's whole appearance out of ExcelJS once, at load, into plain data. Nothing
+downstream of it knows ExcelJS exists, which is what lets the renderer take a
+document instead of a worksheet, lets the result cross a `postMessage`, and
+keeps the styling dependency out of the main-thread bundle entirely.
 
 ---
 
@@ -334,13 +391,14 @@ Two findings from getting there, both recorded in the code:
 
 Stated plainly rather than buried:
 
-- **No Web Worker yet.** Parse and evaluation run on the main thread. At the
-  measured speeds that is imperceptible for a normal model (a 25,000-formula
-  workbook evaluates in ~100 ms), but a pathological one can block for a second
-  or more. Moving it off-thread is not a wrapper: the renderer reads the ExcelJS
-  worksheet directly, so the styled grid would first have to be flattened into a
-  transferable snapshot. That is a real refactor with fidelity regression risk,
-  and it was left undone rather than done shakily.
+- **The Worker is opt-in, and `loadXlsx` on its own still blocks.** The
+  flattening this needed — `layout.ts` and `snapshot.ts` — is done, and
+  `createPreviewWorker()` moves the whole load off-thread with no change to the
+  renderer. But a caller who reaches for `loadXlsx` directly gets the
+  synchronous path, which on a 138,000-formula workbook is 7.5 seconds of frozen
+  tab. Making the off-thread path the default would mean the base entry point
+  could no longer be used server-side, so for now the choice is the caller's and
+  the demo makes it the visible one.
 - **No what-if editing.** The engine has the primitive (`tryEvaluate` runs a
   formula at a position without storing it) and the graph supports dirty-set
   propagation, but no edit UI is wired up. View-only is the current contract.

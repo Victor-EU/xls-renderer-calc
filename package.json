@@ -1,17 +1,20 @@
 {
   "name": "xls-renderer-calc",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "workspaces": [
     "packages/*",
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build -w @xlscalc/formula-engine && npm run build -w @xlscalc/xlsx-preview",
+    "clean": "npm run clean --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b packages/formula-engine packages/xlsx-preview --pretty false",
+    "typecheck": "tsc -b packages/formula-engine packages/xlsx-preview --pretty false && tsc -p apps/demo/tsconfig.json --pretty false",
+    "smoke": "node tools/verify/package-smoke.mjs",
+    "verify": "npm run typecheck && npm run test && npm run build && npm run smoke",
     "dev": "npm run dev -w @xlscalc/demo",
     "oracle": "vitest run tools/oracle/",
     "oracle:gen": "python3 tools/oracle/generate.py",
