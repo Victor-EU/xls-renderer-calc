@@ -1,10 +1,15 @@
 /**
- * Shared judging machinery for both eval corpora.
+ * Shared judging machinery for the harnesses.
  *
- * The synthetic corpus and the real one ask different questions, but they must
- * decide *agreement* the same way — otherwise a bug could be a finding in one
- * harness and a pass in the other, and the two scoreboards would not be
+ * The oracle, the synthetic corpus and the real one ask different questions, but
+ * they must decide *agreement* the same way — otherwise a bug could be a finding
+ * in one harness and a pass in another, and the scoreboards would not be
  * comparable. This module is that single definition.
+ *
+ * It is not yet the whole of it: `agrees` and `show` are still duplicated in
+ * each harness, which is exactly the drift this file exists to prevent and is
+ * worth collapsing. `oracleCannotAnswer` is defined here and used by all of
+ * them, because it was found by a CI run that broke two harnesses at once.
  */
 
 import { colName } from '../packages/formula-engine/src/a1.js';
@@ -50,6 +55,40 @@ export function decode(cell: RawCell, strings: string[]): Scalar | undefined {
     }
   }
 }
+
+/** What LibreOffice answers for a function the running version does not implement. */
+export const UNKNOWN_FUNCTION = '#NAME?';
+
+/**
+ * Did the oracle fail to answer because it does not know the function?
+ *
+ * Which functions LibreOffice implements depends on which LibreOffice. The
+ * author's machine runs 26.2 and knows `XLOOKUP`; a GitHub runner's
+ * `libreoffice-calc` is 24.2 and does not — XLOOKUP arrived in 24.8 — so it
+ * writes `#NAME?` into the fixture and every probe using it reads as a
+ * disagreement. Five of them turned up as MISMATCHes on the first CI run, which
+ * is the loudest signal these harnesses have, reporting a version difference as
+ * false confidence.
+ *
+ * An oracle has to be able to report an absence of evidence. Without this the
+ * build fails on any environment older than the author's, and the reflex fix is
+ * to delete the probe — which is how a suite quietly stops covering the newest
+ * thing in it.
+ *
+ * Narrow on purpose: the oracle said `#NAME?` and we produced something else. If
+ * we answer `#NAME?` too that is agreement and stays a match; if we refused
+ * outright that is `unsupported` and is bucketed before this. Callers must
+ * exclude the result from accuracy rather than count it as a pass — a probe
+ * nobody graded must not be able to flatter the score.
+ */
+export function oracleCannotAnswer(oracleErrorKind: string | undefined, ours: Scalar): boolean {
+  if (oracleErrorKind !== UNKNOWN_FUNCTION) return false;
+  return !(isErr(ours) && ours.kind === UNKNOWN_FUNCTION);
+}
+
+/** The oracle's value as an error kind, if it is one. */
+export const errorKind = (v: Scalar | undefined): string | undefined =>
+  typeof v === 'object' && v !== null ? (v as { kind?: string }).kind : undefined;
 
 export function agrees(ours: Scalar, want: Scalar): boolean {
   if (isErr(ours)) {

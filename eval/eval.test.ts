@@ -50,6 +50,7 @@ import { isErr, type Scalar } from '../packages/formula-engine/src/values.js';
 import { Workbook } from '../packages/formula-engine/src/workbook.js';
 import { loadXlsx } from '../packages/xlsx-preview/src/parse.js';
 import { readXlsx, type RawCell } from '../packages/xlsx-preview/src/ooxml.js';
+import { errorKind, oracleCannotAnswer } from './compare.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUILD = join(HERE, 'build');
@@ -176,7 +177,11 @@ describe.skipIf(present.length === 0)('eval corpus', () => {
         if (rec.provenance === 'circular') outcome.bucket = 'circular';
         else if (rec.provenance === 'unsupported') outcome.bucket = 'unsupported';
         else if (rec.provenance === 'volatile') outcome.bucket = 'volatile';
-        else if (want === undefined) outcome.bucket = 'no-oracle';
+        // Absent from the oracle, or present as a `#NAME?` this LibreOffice
+        // could not evaluate — both are "nobody graded this", not a finding.
+        else if (want === undefined || oracleCannotAnswer(errorKind(want), rec.value)) {
+          outcome.bucket = 'no-oracle';
+        }
         else if (agrees(rec.value, want)) outcome.bucket = declared ? 'mismatch' : 'match';
         else if (declared) outcome.bucket = 'divergence';
         else {

@@ -26,6 +26,7 @@ import { describe, expect, it } from 'vitest';
 import { colNumber } from '../../packages/formula-engine/src/a1.js';
 import { isErr, type Scalar } from '../../packages/formula-engine/src/values.js';
 import { Workbook } from '../../packages/formula-engine/src/workbook.js';
+import { oracleCannotAnswer } from '../../eval/compare.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUILD = join(HERE, 'build');
@@ -228,32 +229,13 @@ describe.skipIf(!fixtures)('LibreOffice oracle', () => {
 /**
  * Did the oracle simply not know this function?
  *
- * LibreOffice answers `#NAME?` for a function it does not implement, and which
- * functions those are depends on the *version* of LibreOffice doing the
- * answering. The author's machine runs 26.2 and knows `XLOOKUP`; the
- * `libreoffice-calc` on a GitHub runner is 24.2 and does not — XLOOKUP arrived
- * in 24.8. So five probes that score clean locally arrived in CI as five
- * MISMATCHes, which is the harness's loudest possible signal, reporting a
- * version difference as false confidence.
- *
- * That is a real defect in the harness, not a CI problem to route around. A
- * differential oracle has to be able to say *I cannot answer this one*, or every
- * environment older than the author's fails the build for the wrong reason —
- * and, worse, the reflex fix is to delete the probe, which is how a test suite
- * quietly stops covering the newest thing it has.
- *
- * The condition is deliberately narrow: the oracle said `#NAME?` and we produced
- * an actual value. If we answer `#NAME?` too, that is agreement and stays a
- * match. If we refuse, that is `unsupported` and is bucketed before this. And
- * because `no-oracle` is excluded from accuracy rather than counted as success,
- * it can never flatter the score — a probe nobody graded is reported as
- * ungraded, on its own line.
+ * The rule itself lives in `eval/compare.ts`, deliberately: both this harness
+ * and the corpus harness hit it on the same CI run, and a judgement that differs
+ * between the two would make their scoreboards incomparable. This is only the
+ * adapter from the oracle's `Expected` shape to it.
  */
-function noOracle(want: Expected, ours: Scalar): boolean {
-  const oracleSaidNAME = want.t === 'err' && want.v === '#NAME?';
-  const weAnswered = !(isErr(ours) && ours.kind === '#NAME?');
-  return oracleSaidNAME && weAnswered;
-}
+const noOracle = (want: Expected, ours: Scalar): boolean =>
+  oracleCannotAnswer(want.t === 'err' ? want.v : undefined, ours);
 
 /** Relative epsilon for floats; exact for everything else. */
 function agrees(ours: Scalar, want: Expected): boolean {
