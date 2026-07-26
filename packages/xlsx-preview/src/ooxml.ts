@@ -54,6 +54,23 @@ export interface RawWorkbook {
   fullCalcOnLoad: boolean;
   /** A stale calcChain makes Excel complain, so write-back must not author one. */
   hasCalcChain: boolean;
+  /**
+   * The application that last saved the file, from `docProps/app.xml`, when it
+   * says. This is not trivia: it decides how much the file's own formula cache
+   * is worth. A workbook saved by Excel carries Excel's answers, which is the
+   * strongest ground truth available; one exported from Google Sheets carries
+   * Google's, which differ in documented ways — `=A1` on an empty cell is blank
+   * rather than 0, and `LEFT` sees the displayed text rather than the value. A
+   * generator that never computed anything says nothing at all.
+   */
+  writer?: string;
+  /**
+   * Set when the workbook asks for iterative calculation, which means its
+   * circular references are deliberate and Excel resolves them by iterating.
+   * Reported so a refusal can say "this workbook expects iteration" rather than
+   * implying the model is broken.
+   */
+  iterative: boolean;
 }
 
 const decoder = new TextDecoder('utf-8');
@@ -81,6 +98,8 @@ export function readXlsx(buf: ArrayBuffer | Uint8Array): RawWorkbook {
     sheets.push({ name: entry.name, cells: xml ? readSheet(xml) : [] });
   }
 
+  const writer = /<Application>([^<]*)<\/Application>/.exec(text('docProps/app.xml') ?? '')?.[1];
+
   return {
     sheets,
     sharedStrings,
@@ -88,6 +107,8 @@ export function readXlsx(buf: ArrayBuffer | Uint8Array): RawWorkbook {
     date1904: meta.date1904,
     fullCalcOnLoad: meta.fullCalcOnLoad,
     hasCalcChain: Boolean(files['xl/calcChain.xml']),
+    ...(writer ? { writer } : {}),
+    iterative: /<calcPr[^>]*\biterate="(1|true)"/.test(workbookXml),
   };
 }
 

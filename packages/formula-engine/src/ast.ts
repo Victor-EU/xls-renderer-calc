@@ -24,6 +24,44 @@ export type Node =
   /** Implicit-intersection marker written by modern Excel: `@A1:A9`. */
   | { k: 'at'; v: Node };
 
+/**
+ * Binding powers, in Microsoft's documented order: reference operators,
+ * negation, `%`, `^`, `*` `/`, `+` `-`, `&`, comparison.
+ *
+ * These live here rather than in the parser because `unparse` needs exactly the
+ * same table to be the parser's inverse. When they were two tables, they drifted
+ * — `unparse` emitted `bin` nodes with no parentheses at all, so a shared
+ * formula `O19*(1-$E$17)` came back as `O19*1-$E$17` and computed a plausible
+ * number two and a half times too large. Keeping one table makes that class of
+ * bug unrepresentable.
+ */
+export const BP_CMP = 10;
+export const BP_CONCAT = 20;
+export const BP_ADD = 30;
+export const BP_MUL = 40;
+export const BP_POW = 50;
+/** Postfix `%`. */
+export const BP_PCT = 60;
+/** Prefix `-`/`+` — above `^` and `%`, which is why `-2^2` is 4. */
+export const BP_UNARY = 70;
+/** The space operator, tightest of the value operators. */
+export const BP_ISECT = 90;
+
+export const INFIX_BP: Record<BinOp, number> = {
+  '=': BP_CMP,
+  '<>': BP_CMP,
+  '<': BP_CMP,
+  '>': BP_CMP,
+  '<=': BP_CMP,
+  '>=': BP_CMP,
+  '&': BP_CONCAT,
+  '+': BP_ADD,
+  '-': BP_ADD,
+  '*': BP_MUL,
+  '/': BP_MUL,
+  '^': BP_POW,
+};
+
 /** Depth-first walk, parents before children. */
 export function walk(node: Node, visit: (n: Node) => void): void {
   visit(node);
@@ -100,8 +138,25 @@ export function translate(node: Node, dRow: number, dCol: number, maxRow: number
   return rec(node);
 }
 
-/** Render an AST back to formula text — used in tooltips, tests and write-back. */
+/**
+ * Render an AST back to formula text — used in tooltips, in tests, and, load
+ * bearingly, to reconstruct every sibling of a shared formula.
+ *
+ * The grammar has no parenthesis node: `(1-A1)` parses to the same subtree as
+ * `1-A1`, and the brackets exist only in how it is attached to its parent. So
+ * `unparse` has to *re-derive* them from precedence. It emits a bracket exactly
+ * when a child binds more loosely than its position allows, which is both
+ * correct and minimal — no defensive parentheses around things that do not need
+ * them, because the output is read by people in tooltips.
+ *
+ * `parse(unparse(ast))` is asserted to deep-equal `ast` over every formula in
+ * both corpora, which is the property that was silently false before.
+ */
 export function unparse(node: Node): string {
+  return emit(node, 0);
+}
+
+function emit(node: Node, minBp: number): string {
   switch (node.k) {
     case 'num':
       return String(node.v);
@@ -118,20 +173,28 @@ export function unparse(node: Node): string {
     case 'name':
       return (node.sheet ? `${quoteSheetName(node.sheet)}!` : '') + node.name;
     case 'fn':
-      return `${node.name}(${node.args.map(unparse).join(',')})`;
-    case 'bin':
-      return `${unparse(node.l)}${node.op}${unparse(node.r)}`;
-    case 'un':
-      return `${node.op}${unparse(node.v)}`;
-    case 'pct':
-      return `${unparse(node.v)}%`;
+      return `${node.name}(${node.args.map((a) => emit(a, 0)).join(',')})`;
     case 'array':
-      return `{${node.rows.map((r) => r.map(unparse).join(',')).join(';')}}`;
-    case 'isect':
-      return `${unparse(node.l)} ${unparse(node.r)}`;
+      return `{${node.rows.map((r) => r.map((c) => emit(c, 0)).join(',')).join(';')}}`;
     case 'union':
-      return `(${node.parts.map(unparse).join(',')})`;
+      // Already delimited by its own parentheses, which are part of the syntax.
+      return `(${node.parts.map((p) => emit(p, 0)).join(',')})`;
+    case 'bin': {
+      const bp = INFIX_BP[node.op];
+      // Left-associative, `^` included, so the right operand needs one more —
+      // mirroring `parseExpr(bp + 1)` on the other side.
+      return paren(bp, minBp, `${emit(node.l, bp)}${node.op}${emit(node.r, bp + 1)}`);
+    }
+    case 'un':
+      return paren(BP_UNARY, minBp, `${node.op}${emit(node.v, BP_UNARY)}`);
+    case 'pct':
+      return paren(BP_PCT, minBp, `${emit(node.v, BP_PCT)}%`);
+    case 'isect':
+      return paren(BP_ISECT, minBp, `${emit(node.l, BP_ISECT)} ${emit(node.r, BP_ISECT + 1)}`);
     case 'at':
-      return `@${unparse(node.v)}`;
+      return paren(BP_UNARY, minBp, `@${emit(node.v, BP_UNARY)}`);
   }
 }
+
+const paren = (bp: number, minBp: number, text: string): string =>
+  bp < minBp ? `(${text})` : text;

@@ -9,9 +9,10 @@
 
 import { compare, textToNumber, toText } from '../coerce.js';
 import { type FnContext } from '../interpreter.js';
-import { ERR, ExcelError, isErr, Matrix, type EvalValue, type Scalar } from '../values.js';
+import { MAX_COLS, MAX_ROWS } from '../a1.js';
+import { ERR, ExcelError, isErr, Matrix, RefValue, type EvalValue, type Scalar } from '../values.js';
 import { fn } from './registry.js';
-import { asMatrix } from './util.js';
+import { asMatrix, asRef } from './util.js';
 import { wildcardToRegExp } from './text.js';
 
 export type Predicate = (v: Scalar) => boolean;
@@ -144,18 +145,42 @@ export function registerConditional(): void {
     });
   });
 
+  /**
+   * Excel's sum/average range is a *corner*, not a range.
+   *
+   * `SUMIF(C1:P56, x, P1:P56)` does not sum the 56 cells of P1:P56. Excel takes
+   * the top-left of the third argument and reshapes it to the criteria range's
+   * dimensions — here 56 rows by 14 columns, so P1:AC56 — and pairs the two
+   * position by position. Authors reach this by dragging a formula sideways
+   * until the criteria range grows and the sum range does not, which is common
+   * enough that Excel made it work rather than an error.
+   *
+   * Reading the values alone cannot reproduce it, because the extra columns
+   * were never fetched. Indexing a 56-cell matrix by a position that runs to
+   * 784 silently finds nothing and contributes nothing, which is how a board
+   * pack came to show 0 where Excel shows 89,263 — a plausible number, no
+   * warning, on 71 cells. So this resolves the *reference* and re-reads it at
+   * the shape Excel would use.
+   */
+  function align(arg: EvalValue, range: Matrix, ctx: FnContext): Matrix | ExcelError {
+    const ref = asRef(arg);
+    if (!ref || (ref.rows === range.rows && ref.cols === range.cols)) return asMatrix(arg, ctx);
+    const bottom = ref.top + range.rows - 1;
+    const right = ref.left + range.cols - 1;
+    if (bottom > MAX_ROWS || right > MAX_COLS) return ERR.ref;
+    return asMatrix(new RefValue(ref.sheet, ref.top, ref.left, bottom, right), ctx);
+  }
+
   fn('SUMIF', 2, 3, (args, ctx) => {
     const range = asMatrix(args[0]!, ctx);
     if (isErr(range)) return range;
-    const target = args[2] === undefined ? range : asMatrix(args[2]!, ctx);
+    const target = args[2] === undefined ? range : align(args[2]!, range, ctx);
     if (isErr(target)) return target;
     return overCriteria(ctx, [args[1]!], (crits) => {
       const pred = makeCriteria(crits[0]!);
       let total = 0;
       for (let i = 0; i < range.size; i++) {
         if (!pred(range.data[i]!)) continue;
-        // The sum range is addressed positionally from its top-left corner, so a
-        // shorter one is read as if it extended to match — Excel's actual behaviour.
         const v = target.data[i];
         if (typeof v === 'number') total += v;
         else if (isErr(v)) return v;
@@ -168,7 +193,7 @@ export function registerConditional(): void {
     const range = asMatrix(args[0]!, ctx);
     if (isErr(range)) return range;
     const pred = makeCriteria(scalarCriteria(args[1]!, ctx));
-    const target = args[2] === undefined ? range : asMatrix(args[2]!, ctx);
+    const target = args[2] === undefined ? range : align(args[2]!, range, ctx);
     if (isErr(target)) return target;
     let total = 0;
     let n = 0;

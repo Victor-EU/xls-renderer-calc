@@ -13,6 +13,17 @@
  * Both passes get their own copy of the buffer: ExcelJS detaches the ArrayBuffer
  * it is handed, and a detached buffer read later yields zero bytes rather than
  * an error — a failure that unit tests with small fixtures do not catch.
+ *
+ * The two passes are also *independent in failure*, which they were not until a
+ * real corpus said otherwise. Three of ten real workbooks made ExcelJS throw —
+ * comments filed under `xl/comments/` instead of `xl/comments1.xml`, a missing
+ * content-type part, the sort of thing a generator emits and Excel forgives —
+ * and the whole load failed. Our own reader parsed all three without complaint.
+ * Losing the styling of a workbook we can compute perfectly, and showing the
+ * user nothing at all, is the wrong trade in a viewer whose entire promise is
+ * that it will not mislead you: a document with default fonts is honest, an
+ * empty screen is not. So a styling failure is now recorded and rendered
+ * around, and only a failure of the *formula* reader is fatal.
  */
 
 import ExcelJS from 'exceljs';
@@ -43,6 +54,13 @@ export interface PreviewDocument {
   sheets: SheetInfo[];
   parseMs: number;
   evalMs: number;
+  /**
+   * Set when the styling pass failed and the document is being shown with
+   * default formatting. The values are unaffected — they come from the other
+   * pass — but the user is told, because a preview that silently drops the
+   * author's formatting is making a claim it has not earned.
+   */
+  stylesError?: string;
 }
 
 export interface LoadOptions extends BindOptions {}
@@ -51,7 +69,14 @@ export async function loadXlsx(buf: ArrayBuffer, opts: LoadOptions = {}): Promis
   const t0 = now();
 
   const styled = new ExcelJS.Workbook();
-  await styled.xlsx.load(buf.slice(0));
+  let stylesError: string | undefined;
+  try {
+    await styled.xlsx.load(buf.slice(0));
+  } catch (e) {
+    // Degrade to default styling rather than failing the load. See the note at
+    // the top of this file: the numbers come from the other pass and are fine.
+    stylesError = e instanceof Error ? e.message : String(e);
+  }
   const raw = readXlsx(buf.slice(0));
   const parseMs = now() - t0;
 
@@ -83,7 +108,15 @@ export async function loadXlsx(buf: ArrayBuffer, opts: LoadOptions = {}): Promis
     };
   });
 
-  return { styled, raw, model, sheets, parseMs: Math.round(parseMs), evalMs: Math.round(evalMs) };
+  return {
+    styled,
+    raw,
+    model,
+    sheets,
+    parseMs: Math.round(parseMs),
+    evalMs: Math.round(evalMs),
+    ...(stylesError === undefined ? {} : { stylesError }),
+  };
 }
 
 function maxOf<T>(items: T[], pick: (t: T) => number): number {

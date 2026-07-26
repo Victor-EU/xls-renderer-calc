@@ -15,3 +15,15 @@ apps/demo/public/scale-*.xlsx
 eval/build/
 eval/__pycache__/
 eval/models/__pycache__/
+
+# The real-data corpus is other people's business workbooks. It is never
+# committed, and neither is anything derived from it that quotes their
+# contents: the per-cell mismatch dump, the inventory (which carries sheet
+# names), and the LibreOffice recalculations. eval/real/REPORT.md *is*
+# committed — it holds counts, timings and function names only, which is what
+# makes a change in behaviour show up as a diff.
+eval/Real data/
+eval/real/recalc/
+eval/real/mismatches.json
+eval/real/inventory.json
+eval/real/__pycache__/

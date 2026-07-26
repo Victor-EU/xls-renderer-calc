@@ -25,34 +25,20 @@ import {
   parseRowOnly,
   type CellRef,
 } from './a1.js';
-import type { BinOp, Node } from './ast.js';
+import {
+  BP_ISECT,
+  BP_PCT,
+  BP_UNARY,
+  INFIX_BP,
+  type BinOp,
+  type Node,
+} from './ast.js';
 import { ParseError, Unsupported } from './errors.js';
 import { tokenize, type Token } from './lexer.js';
 import { ERR, errorOf } from './values.js';
 
-const BP_CMP = 10;
-const BP_CONCAT = 20;
-const BP_ADD = 30;
-const BP_MUL = 40;
-const BP_POW = 50;
-const BP_PCT = 60; // postfix
-const BP_UNARY = 70; // prefix — above ^ and %, per Excel's documented order
-const BP_ISECT = 90; // the space operator, tightest of the value operators
-
-const INFIX_BP: Record<string, number> = {
-  '=': BP_CMP,
-  '<>': BP_CMP,
-  '<': BP_CMP,
-  '>': BP_CMP,
-  '<=': BP_CMP,
-  '>=': BP_CMP,
-  '&': BP_CONCAT,
-  '+': BP_ADD,
-  '-': BP_ADD,
-  '*': BP_MUL,
-  '/': BP_MUL,
-  '^': BP_POW,
-};
+// The binding powers live in ast.ts, because `unparse` has to be this parser's
+// exact inverse and a second copy of the table is a second chance to be wrong.
 
 /** Function-name namespaces Excel writes into the file but never displays. */
 const FN_PREFIXES = ['_XLFN.', '_XLWS.'];
@@ -142,7 +128,7 @@ class Parser {
         continue;
       }
 
-      const bp = INFIX_BP[t.text];
+      const bp = INFIX_BP[t.text as BinOp];
       if (bp === undefined || bp < minBp) break;
       this.bump();
       // Every value operator in Excel is left-associative, `^` included, so the

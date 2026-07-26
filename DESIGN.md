@@ -861,18 +861,66 @@ paragraph explaining why nobody could do better. The unrelated ulp fix made it
 match; the symmetric gate failed on the now-false declaration; the explanation
 turned out to be an excuse for a real bug behind 67 cells.
 
-### 12.7 ? Corpus breadth is still the binding constraint
+### 12.7 ✓ The third harness: workbooks nobody wrote for us
 
-Better than it was, and still the weakest evidence here. The ten workbooks are
-written the way an agent writes them, which is a far better sample than
-hand-picked probes — and they are still not production output. Widening with
-**real agent output** remains the highest-value next step (§16).
+§12.7 used to say corpus breadth was the binding constraint and that widening
+with real output was the highest-value next step. That is now done.
+`eval/real/` is **202,795 formula cells across ten workbooks written by other
+people and other tools** — two Google Sheets budget exports, a 35-sheet board
+pack, four generated models, and a 138,421-formula business plan last saved by
+Microsoft Excel.
 
-One methodology limit worth carrying: **LibreOffice writes at most 15
-significant digits into the `.xlsx`**, where Excel writes up to 17. The oracle
-therefore cannot carry full double precision, and a model with a knife-edge can
-disagree for reasons that are nobody's bug. The `inherited` bucket exists to
-separate that class out rather than let it dilute the gate.
+**The oracle changes shape, and that is the design.** A synthetic workbook is
+emitted with no answers and graded against LibreOffice. A real workbook mostly
+arrives *with* the answers its author's application computed, so it grades
+itself — and provenance decides what that is worth. Excel's cache is ground
+truth. A Google Sheets export is a self-consistent engine with documented
+differences (`=A1` on an empty cell is blank rather than 0; `LEFT` sees the
+displayed text). A generator's cache is whatever it managed to implement. So
+every declared divergence names the writer it differs *from*, and divergences
+are declared as **rules with an exact expected count** rather than per address,
+because one Google Sheets behaviour accounts for 2,136 cells and listing each
+would bury the gate.
+
+| what it found | why the synthetic corpus could not |
+|---|---|
+| **`unparse` dropped every parenthesis** — shared formulas reconstructed as `O19*1-$E$17` from `O19*(1-$E$17)`, silently 2.5× wrong | openpyxl writes every formula in full and never emits a shared range, so the translate → unparse path was never exercised |
+| **Unary `+` coerced** — `=+IFERROR(...,"n/a")` became `#VALUE!` on 739 cells | The Lotus-habit `=+FORMULA` prefix is something people write, not something a generator emits |
+| **`NaN` escaped as a value** from `RRI` — not an error, so `IFERROR` could not catch it | Needed a real model to hit a fractional root of a negative |
+| **`RRI`'s edges were wrong** — settled from 735 real Excel calls with cached arguments | Requires a file Excel itself computed |
+| **`SUMIF` never fetched its real sum range** — Excel reshapes `P1:P56` to the criteria range's 56×14, we read past a 56-cell matrix and showed **0 where Excel shows 89,263** | Requires an author who dragged a formula until the ranges stopped matching |
+| **Three of ten files would not open at all** — ExcelJS threw on non-standard part paths | Requires files written by tools other than openpyxl |
+
+**The finding that is not a bug, and matters most.** 36.6 % of the corpus
+renders ⚠, and almost none of it is a missing function. In the business plan,
+**33 unsupported roots — 21 `OFFSET`, 12 `CELL` — darken 64,809 cells**, just
+under half the workbook: 1,964 dark cells per unsupported root. Poisoning
+downstream is the right call (§2) and this is its price. The amplification, not
+the refusal count, is what decides whether the doctrine is usable, and it is the
+number to watch if `OFFSET`/`INDIRECT` are ever reconsidered (§16).
+
+A second architectural lesson: **ExcelJS is used only for styling, and its
+failure was denying service on files whose numbers we compute perfectly.** The
+doctrine "never a wrong number" extends to "never nothing at all when we have
+the numbers": a styling failure is now recorded on the document and rendered
+around, and only a failure of the formula reader is fatal.
+
+### 12.8 ? What the corpora still cannot tell us
+
+Two oracle limits, both structural rather than fixable:
+
+**LibreOffice writes at most 15 significant digits into the `.xlsx`**, where
+Excel writes up to 17. The synthetic oracle therefore cannot carry full double
+precision, and a model with a knife-edge can disagree for reasons that are
+nobody's bug. The `inherited` bucket exists to separate that class out rather
+than let it dilute the gate.
+
+**Only one real workbook is Excel-authored.** Ten files is wide, not random, and
+everything graded against an export or a generator is graded against a second
+opinion. A cache can also be stale — recording what an application last
+computed, not what it would compute today. Nothing in the corpus looked stale;
+nothing rules it out. The honest summary is that the vocabulary claim is now
+evidenced rather than assumed, and the *precision* claim still rests on one file.
 
 ---
 

@@ -16,7 +16,9 @@
     "oracle": "vitest run tools/oracle/",
     "oracle:gen": "python3 tools/oracle/generate.py",
     "eval": "vitest run eval/",
-    "eval:gen": "python3 eval/build.py"
+    "eval:gen": "python3 eval/build.py",
+    "eval:real": "vitest run eval/real/",
+    "eval:real:gen": "python3 eval/real/inventory.py && python3 eval/real/recalc.py"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

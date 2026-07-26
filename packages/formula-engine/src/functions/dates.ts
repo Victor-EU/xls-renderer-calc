@@ -55,7 +55,20 @@ interface Ymd {
 }
 
 export function serialToYmd(serial: number, sys: DateSystem): Ymd {
-  const d = new Date(serialToMs(Math.floor(serial), sys));
+  const whole = Math.floor(serial);
+  // Serial 0 in the 1900 system is Excel's "January 0, 1900" — a placeholder
+  // day that does not exist, sitting one before 1900-01-01 so that the epoch
+  // has a zero. Excel reports YEAR 1900, MONTH 1, DAY 0 for it, and therefore
+  // EOMONTH(0,0) is the 31st of January. Arithmetically the instant is
+  // 1899-12-31, which is what the conversion below produces and what
+  // LibreOffice and Google Sheets both report — so without this case a date
+  // function lands in the wrong *month*, not merely the wrong day.
+  //
+  // This is not decoration: an empty cell coerces to 0, and a model still being
+  // built points date functions at empty cells constantly. Two real budgets in
+  // the corpus do it 184 times between them.
+  if (whole === 0 && !sys.date1904) return { y: 1900, m: 1, d: 0 };
+  const d = new Date(serialToMs(whole, sys));
   return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() };
 }
 

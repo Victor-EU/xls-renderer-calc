@@ -233,7 +233,14 @@ export function registerFinancial(): void {
     if (isErr(pv)) return pv;
     const fv = num(args, 2, ctx);
     if (isErr(fv)) return fv;
-    if (nper <= 0 || pv === 0) return ERR.num;
+    if (nper <= 0) return ERR.num;
+    // Growing from nothing to nothing is a rate of zero, not an error. Excel
+    // special-cases only this one corner: `pv = 0` with a non-zero `fv` really
+    // is #NUM!, and `fv = 0` with a non-zero `pv` needs no special case at all
+    // because the formula already gives -1. Derived from 735 RRI calls in a
+    // business plan saved by Excel itself, where every one of those three
+    // shapes appears; LibreOffice returns #VALUE! here and is the outlier.
+    if (pv === 0) return fv === 0 ? 0 : ERR.num;
     return Math.pow(fv / pv, 1 / nper) - 1;
   });
 

@@ -21,8 +21,10 @@ generated financial model renders as a labelled skeleton. The previous fix was a
 server-side LibreOffice recalc, which costs the preview its two defining
 properties: no server, and nothing leaves the browser.
 
-**Status: built and verified.** 83 tests green; 399 oracle probes and a
-**37,098-cell corpus of ten whole workbooks** both at 100 % accuracy with zero
+**Status: built and verified.** 109 tests green; 399 oracle probes, a
+**37,098-cell synthetic corpus of ten whole workbooks**, and a
+**202,795-cell corpus of ten *real* workbooks** — including a 138,421-formula
+business plan last saved by Excel itself — all at 100 % accuracy with zero
 false confidence; and a real-browser check confirming that a file with *no*
 cached values renders identical numbers to the same file after a LibreOffice
 recalc.
@@ -33,6 +35,7 @@ npm test                       # engine + oracle + eval corpus
 npm run dev                    # the preview at http://localhost:5176
 python3 tools/oracle/generate.py   # rebuild oracle fixtures (needs LibreOffice)
 python3 eval/build.py              # rebuild the eval corpus (needs LibreOffice)
+npm run eval:real                  # the real-workbook corpus, if you have one
 node tools/verify/drive.mjs        # end-to-end check in a real browser
 ```
 
@@ -178,6 +181,35 @@ ordering — where `"label" > 0` really is TRUE — instead of Excel's type-scop
 criteria comparison. Every conditional sum over a column with a header or an
 `""` in it was inflated, plausibly, invisibly.
 
+### The third harness: workbooks nobody wrote for us
+
+A synthetic corpus is a much better sample than hand-picked probes and is still
+not production output — which [`eval/`](eval/README.md) said about itself.
+[`eval/real/`](eval/real/README.md) is that sample: ten workbooks written by
+other people and other tools, graded against the answers their own applications
+computed. Provenance is load-bearing, because it decides what a cache is worth.
+One of them was last saved by Microsoft Excel, which makes its 138,421 cached
+values the best ground truth this project has had.
+
+```
+202,795 formula cells   answered 63.4%   accuracy 100.0%   unexplained 0
+```
+
+It found five more bugs, four of which the synthetic corpus could not have found
+in principle. The worst: **every formula in a shared range was reconstructed
+without its parentheses.** OOXML stores `<f t="shared">` once and offsets it for
+each sibling; that path goes parse → translate → unparse, and `unparse` emitted
+binary operators with no brackets, because the grammar has no parenthesis node.
+`O19*(1-$E$17)` came back as `O19*1-$E$17` — no error, a number two and a half
+times too large. openpyxl writes every formula out in full, so no synthetic
+fixture could ever have exercised it.
+
+The finding that is not a bug: **36.6 % of that corpus renders ⚠**, and almost
+none of it is a missing function. In the business plan, **33 unsupported roots —
+21 `OFFSET`, 12 `CELL` — darken 64,809 cells**, just under half the workbook.
+Poisoning downstream is the right design; 1,964 dark cells per unsupported root
+is the number that decides whether it is usable.
+
 Three behaviours the oracle pinned that would otherwise have been guesses:
 General-format text switches to scientific notation at `1E16` and `1E-15`
 (measured by bracketing, not assumed), and `ROUND(2.675,2)` is `2.68` — which
@@ -311,12 +343,28 @@ Stated plainly rather than buried:
   default Office palette; a workbook with an embedded custom theme in
   `xl/theme/theme1.xml` will render its accent colours slightly off.
 - **In-sheet charts are not drawn.**
-- **The corpus is synthetic.** 399 probes plus ten whole workbooks
-  ([`eval/`](eval/README.md)) plus four samples. The workbooks are written the
-  way an agent writes them, which is a far better sample than hand-picked
-  probes — and still not production output. Widening it with real generated
-  models remains the highest-value next step, and the vocabulary claim is still
-  the weakest evidence here.
+- **The real corpus is ten files, and only one of them is Excel-authored.**
+  [`eval/real/`](eval/real/README.md) closed the "no production output" gap —
+  202,795 cells written by other people and other tools — but ten workbooks are
+  wide, not random. Everything graded against a Google Sheets export or a
+  generator is graded against a second opinion; only the business plan Excel
+  saved is ground truth. A file's cache can also be stale, recording what its
+  application last computed rather than what it would compute today. Nothing
+  here looked stale; nothing rules it out.
+- **A whole-column reference is clamped to the used range**, which is right for
+  `SUM` and wrong for the positional functions: `INDEX('Sheet'!$D:$O, 63, n)`
+  returns `#REF!` where Excel finds an empty cell. Clamping is deliberate —
+  expanding a column literally is a million cells per edge, and materialising a
+  graph that size is what caused an out-of-memory failure earlier in this
+  project. Both outcomes are a visible refusal rather than a wrong number, so
+  the doctrine holds; the fidelity does not. Declared and counted in
+  [`eval/real/divergences.json`](eval/real/divergences.json) so it cannot grow
+  unnoticed. Fixing it means teaching `RefValue` to remember where it came from.
+- **No iterative calculation.** A workbook that sets `iterate="1"` is asking for
+  its circular references to be converged, which is the ordinary shape of
+  interest on an average balance. We refuse them. The refusal is correct for an
+  engine that does not iterate, but it is a capability gap and not a broken
+  model — 4,194 cells in one real workbook.
 - **The oracle carries only 15 significant digits.** LibreOffice writes at most
   15 into the `.xlsx`; Excel writes up to 17. A model with a knife-edge — a
   `ROUND` on a half-way boundary, a criterion built by concatenating a computed

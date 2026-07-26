@@ -109,7 +109,16 @@ export function evaluate(node: Node, ctx: FnContext): EvalValue {
 
     case 'un': {
       const v = deref(evaluate(node.v, ctx), ctx);
-      if (node.op === '+') return mapNumeric(v, (n) => n);
+      // Unary plus is an identity, not a coercion — `=+"n/a"` is "n/a", and
+      // `=+TRUE` is TRUE. The asymmetry with unary minus (`=-"n/a"` really is
+      // #VALUE!) looks like an oversight and is not: `+` survives from Lotus
+      // 1-2-3, where every formula began with one, and Excel kept it harmless
+      // so those files would still open. Finance models written by people who
+      // learned the habit are still full of `=+IFERROR(...,"n/a")`, and
+      // coercing here turns the text fallback the author asked for into an
+      // error — which is what this engine did until a real business plan,
+      // saved by Excel itself, disagreed on 739 cells.
+      if (node.op === '+') return v;
       return mapNumeric(v, (n) => -n);
     }
 
@@ -167,11 +176,33 @@ function callFunction(node: Node & { k: 'fn' }, ctx: FnContext): EvalValue {
   }
   if (def.volatile) ctx.volatile = true;
 
-  if (def.lazy) return def.lazy(node.args, ctx, evaluate);
+  if (def.lazy) return finite(def.lazy(node.args, ctx, evaluate));
 
   const argCtx = def.arrayArgs ? { ...ctx, arrayMode: true } : ctx;
   const args = node.args.map((a) => (isMissing(a) ? MISSING : evaluate(a, argCtx)));
-  return def.call(args, ctx);
+  return finite(def.call(args, ctx));
+}
+
+/**
+ * Excel has no NaN and no infinity, so neither may escape a function.
+ *
+ * The operators have guarded this since a `1E+308*10` probe, but function
+ * results did not, and the gap is worse there: `RRI(3, -4771, 19475)` asks for
+ * a fractional root of a negative number, `Math.pow` answers NaN, and NaN is
+ * not an error — it flows onward and renders as though it were a value. A
+ * caller's `IFERROR` cannot catch it either, which is exactly how the author of
+ * that model expected to be protected. One guard here covers every function
+ * rather than waiting for each to be caught individually.
+ */
+function finite(v: EvalValue): EvalValue {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : ERR.num;
+  if (isMatrix(v)) {
+    for (let i = 0; i < v.size; i++) {
+      const x = v.data[i];
+      if (typeof x === 'number' && !Number.isFinite(x)) v.data[i] = ERR.num;
+    }
+  }
+  return v;
 }
 
 /** Sentinel for an omitted argument — distinct from blank, which is a value. */

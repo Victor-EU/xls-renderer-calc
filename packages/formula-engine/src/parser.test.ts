@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { unparse } from './ast.js';
+import { MAX_COLS, MAX_ROWS } from './a1.js';
+import { translate, unparse } from './ast.js';
 import { isUnsupported, ParseError } from './errors.js';
 import { parseFormula } from './parser.js';
 
@@ -156,5 +157,63 @@ describe('refusals — these must never become values', () => {
       expect(e).toBeInstanceOf(ParseError);
       expect((e as ParseError).annotate()).toContain('^');
     }
+  });
+});
+
+/**
+ * `unparse` is the parser's inverse, and this is the property that matters:
+ * re-parsing its output must give back the same tree.
+ *
+ * It was silently false. The grammar has no parenthesis node, so `(1-A1)` and
+ * `1-A1` parse identically and the brackets survive only in how the subtree
+ * hangs off its parent — which `unparse` used to discard. Nothing noticed,
+ * because `unparse` was mostly read by humans in tooltips. Then a shared
+ * formula `O19*(1-$E$17)` was reconstructed for its siblings as `O19*1-$E$17`,
+ * and a real workbook rendered numbers two and a half times too large with no
+ * error anywhere. Text equality would not have caught it: the wrong output is
+ * perfectly stable under further round-trips. Only the tree tells the truth.
+ */
+describe('unparse is the parser inverse', () => {
+  const CASES = [
+    'O19*(1-$E$17)',
+    'A1*(B1+C1)/(D1-E1)',
+    '(1+2)*3',
+    '1-(2-3)',
+    '2/(3*4)',
+    '-(2^2)',
+    '(1+2)%',
+    '(A1=B1)*2',
+    'A1&(B1&C1)',
+    '2^(3^2)',
+    '(A1+B1)^2',
+    'SUM((1+2)*3,-(A1-B1))',
+    'IF((A1>0)*(B1>0),(A1+B1)/2,0)',
+    '-2^2',
+    '2^3^2',
+    '1+2*3',
+    "('My Sheet'!A1+2)*3",
+    '{1,2;3,4}',
+    '(A1:A5 B1:D1)',
+    'SUM(A1:A5,(B1+C1))',
+  ];
+
+  for (const f of CASES) {
+    it(`round-trips ${f}`, () => {
+      const once = parseFormula(f);
+      expect(parseFormula(unparse(once))).toEqual(once);
+    });
+  }
+
+  it('restores the brackets a shared formula depends on', () => {
+    // The exact regression: translate one column right, then read it back.
+    const shifted = translate(parseFormula('O19*(1-$E$17)'), 0, 1, MAX_ROWS, MAX_COLS);
+    expect(unparse(shifted)).toBe('P19*(1-$E$17)');
+  });
+
+  it('adds no brackets that are not needed', () => {
+    // The output is read by people. Defensive parentheses everywhere would be
+    // correct and unusable.
+    expect(unparse(parseFormula('1+2*3-4/5'))).toBe('1+2*3-4/5');
+    expect(unparse(parseFormula('SUM(A1:A5)+1'))).toBe('SUM(A1:A5)+1');
   });
 });
