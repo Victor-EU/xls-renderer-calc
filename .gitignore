@@ -5,6 +5,9 @@ dist/
 __pycache__/
 *.pyc
 
+# Written by the release workflow's harness check, and by anyone reproducing it.
+harness.json
+
 # The engine's build copies the root CAPABILITY.md in beside its dist, so the
 # published tarball carries the list that VERSIONING.md tells consumers to diff.
 # The root copy is the source; this one is an artefact.

@@ -271,8 +271,10 @@ truth this project has had.
 > only this repository's word for it. The two harnesses that **are** reproducible
 > — the 399-probe oracle and the 37,098-cell synthetic corpus, both scored
 > against LibreOffice — are the ones to judge the engine on if you would rather
-> not take a claim on trust. `npm run oracle` and `npm run eval` regenerate both
-> from source, given a LibreOffice install.
+> not take a claim on trust. Given a LibreOffice install, `npm run oracle:gen`
+> and `npm run eval:gen` rebuild both corpora from source in about thirty-five
+> seconds, and `npm run oracle` / `npm run eval` score them. The release workflow
+> does exactly that on every tag, and fails if either suite skips.
 
 It found eight more bugs across two passes, most of which the synthetic corpus
 could not have found in principle. The worst: **every formula in a shared range was reconstructed
