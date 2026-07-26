@@ -51,7 +51,7 @@ interface Divergence {
   why: string;
 }
 
-type Bucket = 'match' | 'unsupported' | 'divergence' | 'mismatch';
+type Bucket = 'match' | 'unsupported' | 'divergence' | 'no-oracle' | 'mismatch';
 
 interface Outcome {
   suite: string;
@@ -129,6 +129,10 @@ describe.skipIf(!fixtures)('LibreOffice oracle', () => {
       let bucket: Bucket;
       if (rec.provenance === 'unsupported' || rec.provenance === 'circular') {
         bucket = 'unsupported';
+      } else if (noOracle(want, rec.value)) {
+        // The oracle does not know this function. Not a disagreement — an
+        // absence of evidence, and it must not be scored as either.
+        bucket = 'no-oracle';
       } else if (agrees(rec.value, want)) {
         bucket = declared ? 'mismatch' : 'match';
       } else {
@@ -156,27 +160,42 @@ describe.skipIf(!fixtures)('LibreOffice oracle', () => {
   it('reports the scoreboard', () => {
     const rows: string[] = [
       '',
-      '| suite | probes | match | unsupported | divergence | MISMATCH |',
-      '|---|---:|---:|---:|---:|---:|',
+      '| suite | probes | match | unsupported | divergence | no oracle | MISMATCH |',
+      '|---|---:|---:|---:|---:|---:|---:|',
     ];
     for (const [suite, list] of bySuite) {
       const n = (b: Bucket): number => list.filter((o) => o.bucket === b).length;
       rows.push(
-        `| ${suite} | ${list.length} | ${n('match')} | ${n('unsupported')} | ${n('divergence')} | ${n('mismatch')} |`,
+        `| ${suite} | ${list.length} | ${n('match')} | ${n('unsupported')} | ${n('divergence')} | ${n('no-oracle')} | ${n('mismatch')} |`,
       );
     }
     const total = (b: Bucket): number => outcomes.filter((o) => o.bucket === b).length;
     rows.push(
-      `| **total** | **${outcomes.length}** | **${total('match')}** | **${total('unsupported')}** | **${total('divergence')}** | **${total('mismatch')}** |`,
+      `| **total** | **${outcomes.length}** | **${total('match')}** | **${total('unsupported')}** | **${total('divergence')}** | **${total('no-oracle')}** | **${total('mismatch')}** |`,
     );
 
-    const attempted = outcomes.length - total('unsupported');
-    const accuracy = attempted === 0 ? 0 : ((total('match') + total('divergence')) / attempted) * 100;
+    // Coverage is about us: how many probes we were willing to answer.
+    // Accuracy is about the ones somebody could grade, so `no-oracle` comes out
+    // of the denominator rather than counting as a pass — an ungraded probe
+    // must not be able to improve the score.
+    const answered = outcomes.length - total('unsupported');
+    const graded = answered - total('no-oracle');
+    const accuracy = graded === 0 ? 0 : ((total('match') + total('divergence')) / graded) * 100;
     rows.push('');
     rows.push(
-      `coverage ${(((outcomes.length - total('unsupported')) / outcomes.length) * 100).toFixed(1)}% · ` +
-        `accuracy ${accuracy.toFixed(1)}% · false confidence ${total('mismatch')}`,
+      `coverage ${((answered / outcomes.length) * 100).toFixed(1)}% · ` +
+        `accuracy ${accuracy.toFixed(1)}% of ${graded} graded · false confidence ${total('mismatch')}`,
     );
+
+    const ungraded = outcomes.filter((o) => o.bucket === 'no-oracle');
+    if (ungraded.length) {
+      rows.push(
+        '',
+        `Not graded — this LibreOffice does not implement these (it answered #NAME?).`,
+        `A newer one would; see \`noOracle\`. These probes prove nothing either way:`,
+      );
+      for (const o of ungraded) rows.push(`  ${o.suite}: ${o.formula}  →  ours ${o.ours}`);
+    }
 
     const unsupported = outcomes.filter((o) => o.bucket === 'unsupported');
     if (unsupported.length) {
@@ -205,6 +224,36 @@ describe.skipIf(!fixtures)('LibreOffice oracle', () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * Did the oracle simply not know this function?
+ *
+ * LibreOffice answers `#NAME?` for a function it does not implement, and which
+ * functions those are depends on the *version* of LibreOffice doing the
+ * answering. The author's machine runs 26.2 and knows `XLOOKUP`; the
+ * `libreoffice-calc` on a GitHub runner is 24.2 and does not — XLOOKUP arrived
+ * in 24.8. So five probes that score clean locally arrived in CI as five
+ * MISMATCHes, which is the harness's loudest possible signal, reporting a
+ * version difference as false confidence.
+ *
+ * That is a real defect in the harness, not a CI problem to route around. A
+ * differential oracle has to be able to say *I cannot answer this one*, or every
+ * environment older than the author's fails the build for the wrong reason —
+ * and, worse, the reflex fix is to delete the probe, which is how a test suite
+ * quietly stops covering the newest thing it has.
+ *
+ * The condition is deliberately narrow: the oracle said `#NAME?` and we produced
+ * an actual value. If we answer `#NAME?` too, that is agreement and stays a
+ * match. If we refuse, that is `unsupported` and is bucketed before this. And
+ * because `no-oracle` is excluded from accuracy rather than counted as success,
+ * it can never flatter the score — a probe nobody graded is reported as
+ * ungraded, on its own line.
+ */
+function noOracle(want: Expected, ours: Scalar): boolean {
+  const oracleSaidNAME = want.t === 'err' && want.v === '#NAME?';
+  const weAnswered = !(isErr(ours) && ours.kind === '#NAME?');
+  return oracleSaidNAME && weAnswered;
+}
 
 /** Relative epsilon for floats; exact for everything else. */
 function agrees(ours: Scalar, want: Expected): boolean {

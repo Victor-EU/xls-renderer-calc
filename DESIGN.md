@@ -761,6 +761,7 @@ rather than a setup difference.
 | match | the two agree |
 | unsupported | we refused, and said why — acceptable, tracked |
 | divergence | they disagree and we deliberately follow Excel — declared |
+| no oracle | this LibreOffice does not implement it (`#NAME?`) — ungraded, excluded from accuracy |
 | **MISMATCH** | they disagree and we did not know — **hard gate at zero** |
 
 Current: **399 probes, 13 suites, coverage 100 %, accuracy 100 %, false

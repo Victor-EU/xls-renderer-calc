@@ -195,13 +195,23 @@ one bucket:
 | **match** | the two agree |
 | **unsupported** | we refused, and said why — acceptable, tracked |
 | **divergence** | they disagree and we deliberately follow Excel — declared in `divergences.json` |
+| **no oracle** | this LibreOffice does not implement the function, so nobody graded it — excluded from accuracy, never counted as a pass |
 | **MISMATCH** | they disagree and we did not know — **hard gate at zero** |
 
 Current run — 399 probes across 13 suites:
 
 ```
-coverage 100.0%   accuracy 100.0%   false confidence 0
+coverage 100.0%   accuracy 100.0% of 399 graded   false confidence 0
 ```
+
+**Which functions LibreOffice knows depends on its version**, and that is a
+property of the harness, not a detail. The `no oracle` bucket exists because a
+GitHub runner ships LibreOffice 24.2, which predates `XLOOKUP` and answers
+`#NAME?` to it — five probes that score clean on 26.2 arrived in CI as five
+MISMATCHes, the loudest signal the harness has, reporting a version difference
+as false confidence. A differential oracle has to be able to say *I cannot
+answer this one*; the alternative is deleting the probe, which is how a suite
+quietly stops covering the newest thing it has.
 
 The probes target where an engine goes *quietly* wrong rather than covering
 functions by count: coercion, blank-versus-empty-string, decimal rounding
