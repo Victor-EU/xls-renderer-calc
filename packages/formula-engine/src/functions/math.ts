@@ -2,7 +2,7 @@ import { ERR, ExcelError, isErr, Matrix, type EvalValue, type Scalar } from '../
 import { Unsupported } from '../errors.js';
 import { type FnContext } from '../interpreter.js';
 import { fn, refuse } from './registry.js';
-import { asMatrix, collectNumbers, finiteOr, num, optNum, trunc } from './util.js';
+import { asMatrix, collectNumbers, finiteOr, maxOf, minOf, num, optNum, trunc } from './util.js';
 
 /**
  * Excel rounds the *decimal* value, not the binary double.
@@ -353,9 +353,9 @@ function subtotalOf(code: number, ns: number[]): Scalar {
     case 3:
       return ns.length;
     case 4:
-      return ns.length ? Math.max(...ns) : 0;
+      return ns.length ? maxOf(ns) : 0;
     case 5:
-      return ns.length ? Math.min(...ns) : 0;
+      return ns.length ? minOf(ns) : 0;
     case 6:
       return ns.reduce((a, b) => a * b, 1);
     case 9:

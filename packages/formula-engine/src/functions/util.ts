@@ -181,6 +181,27 @@ export function asRef(v: EvalValue): RefValue | undefined {
   return isRef(v) ? v : undefined;
 }
 
+/**
+ * Smallest and largest of a list, without spreading it into an argument list.
+ *
+ * `Math.min(...ns)` is the obvious spelling and it is a landmine: the spread
+ * becomes one JS argument per element, and past roughly 125,000 arguments V8
+ * throws `RangeError: Maximum call stack size exceeded`. `=MIN(A:A)` down a
+ * column of a transaction export is an ordinary formula over an ordinary sheet,
+ * and because a RangeError is not an `Unsupported` it escaped `evaluateAll` and
+ * failed the whole workbook — the file rendered as nothing at all.
+ */
+export const minOf = (ns: number[]): number => {
+  let out = ns[0]!;
+  for (let i = 1; i < ns.length; i++) if (ns[i]! < out) out = ns[i]!;
+  return out;
+};
+export const maxOf = (ns: number[]): number => {
+  let out = ns[0]!;
+  for (let i = 1; i < ns.length; i++) if (ns[i]! > out) out = ns[i]!;
+  return out;
+};
+
 /** Excel truncates toward zero wherever an integer argument is required. */
 export const trunc = (n: number): number => (n < 0 ? Math.ceil(n) : Math.floor(n));
 

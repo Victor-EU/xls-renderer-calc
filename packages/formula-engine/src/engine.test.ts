@@ -201,6 +201,18 @@ describe('lookup', () => {
   it('does INDEX/MATCH', () => {
     expect(calc('=INDEX(B1:B3,MATCH(9,A1:A3,0))', table)).toBe('nine');
   });
+
+  it('treats an exact-match key as a key, not as criteria', () => {
+    // Exact match used to run its key through the *IF family's criteria parser,
+    // so a label that begins with a comparison operator stopped being a label.
+    // Ageing buckets and size bands read exactly like that.
+    const buckets = { A1: '>90 days', B1: 'writeoff', A2: '30-60', B2: 'watch', A3: 120, B3: 'n/a' };
+    expect(calc('=MATCH(">90 days",A1:A3,0)', buckets)).toBe(1);
+    expect(calc('=VLOOKUP(">90 days",A1:B3,2,FALSE)', buckets)).toBe('writeoff');
+    expect(calc('=MATCH("<>",A1:A3,0)', buckets)).toBe(ERR.na);
+    // And it stays type-strict, where the criteria parser coerced numeric text.
+    expect(calc('=MATCH("120",A1:A3,0)', buckets)).toBe(ERR.na);
+  });
 });
 
 describe('conditional aggregates', () => {
@@ -218,6 +230,20 @@ describe('conditional aggregates', () => {
 
   it('reads multi-criteria form', () => {
     expect(calc('=SUMIFS(B1:B3,A1:A3,"North*",B1:B3,">15")', grid)).toBe(30);
+  });
+
+  it('reshapes a mis-sized aggregate range in the *IFS family too', () => {
+    // Excel treats the aggregate range as a *corner* and resizes it to the
+    // criteria range — the rule SUMIF's third argument already followed. Its
+    // four siblings take theirs first and were reading it as written, so a
+    // single-cell corner aggregated one cell and answered a plausible fraction
+    // of the truth.
+    const wide = { C1: 1, D1: 1, C2: 1, D2: 0, C3: 1, D3: 1, E1: 10, F1: 20, E2: 30, F2: 40, E3: 50, F3: 60 };
+    expect(calc('=SUMIF(C1:D3,1,E1)', wide)).toBe(170);
+    expect(calc('=SUMIFS(E1,C1:D3,1)', wide)).toBe(170);
+    expect(calc('=AVERAGEIFS(E1,C1:D3,1)', wide)).toBe(34);
+    expect(calc('=MAXIFS(E1,C1:D3,1)', wide)).toBe(60);
+    expect(calc('=MINIFS(E1,C1:D3,1)', wide)).toBe(10);
   });
 });
 

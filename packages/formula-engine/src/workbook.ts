@@ -312,9 +312,7 @@ export class Workbook implements EvalHost {
           cell.ast = ast;
           nodes.set(id, ast);
         } catch (e) {
-          const code = isUnsupported(e) ? e.code : 'SYNTAX';
-          const message = e instanceof Error ? e.message : String(e);
-          const subject = isUnsupported(e) ? (e.subject ?? code) : 'syntax';
+          const { code, subject, message } = classify(e);
           cell.fault = { code, message, subject };
           this.markUnsupported(id, message);
           noteGap(code, subject, message, id);
@@ -455,15 +453,9 @@ export class Workbook implements EvalHost {
             mismatches.push({ address: this.addressOf(id), computed: value, cached: rec.cached });
           }
         } catch (e) {
-          if (isUnsupported(e) || isParseError(e)) {
-            const message = e.message;
-            const code = isUnsupported(e) ? e.code : 'SYNTAX';
-            const subject = isUnsupported(e) ? (e.subject ?? code) : 'syntax';
-            this.markUnsupported(id, message);
-            noteGap(code, subject, message, id);
-          } else {
-            throw e;
-          }
+          const { code, subject, message } = classify(e);
+          this.markUnsupported(id, message);
+          noteGap(code, subject, message, id);
         }
       }
     } finally {
@@ -552,10 +544,35 @@ export class Workbook implements EvalHost {
       const ctx = this.contextFor(sheet, row, col);
       return { value: collapse(evaluate(ast, ctx), ctx) };
     } catch (e) {
-      if (isUnsupported(e) || isParseError(e)) return { unsupported: e.message };
-      throw e;
+      // Same rule as `evaluateAll`: this is a speculative evaluation on behalf
+      // of the audit pass, and it must never be able to fail the load.
+      return { unsupported: classify(e).message };
     }
   }
+}
+
+/**
+ * Turn anything thrown while handling one cell into that cell's refusal.
+ *
+ * `Unsupported` and `ParseError` are the two we author, and they carry their own
+ * code and subject. Everything else is a defect in this engine — and the rule
+ * that matters is that it stays *this cell's* problem. Rethrowing unwound
+ * `evaluateAll` and lost the entire workbook, which was reachable from a single
+ * ordinary formula: `=VLOOKUP(A1,T,2,)` threw a TypeError and `=MIN(A:A)` down a
+ * long column threw a RangeError, and either one turned a 138,000-formula
+ * preview into a blank screen. Failing one cell loudly is strictly better than
+ * failing all of them silently, so unexpected failures are filed under
+ * `INTERNAL` — visible in `gaps`, impossible to mistake for a decision.
+ */
+function classify(e: unknown): { code: string; subject: string; message: string } {
+  if (isUnsupported(e)) return { code: e.code, subject: e.subject ?? e.code, message: e.message };
+  if (isParseError(e)) return { code: 'SYNTAX', subject: 'syntax', message: e.message };
+  const detail = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  return {
+    code: 'INTERNAL',
+    subject: e instanceof Error ? e.name : 'internal',
+    message: `internal error while evaluating this cell — ${detail}`,
+  };
 }
 
 function nameKey(name: string, sheet: number | undefined): string {

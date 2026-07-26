@@ -29,12 +29,23 @@ const ENTITY: Record<string, string> = {
 export function decodeEntities(s: string): string {
   if (!s.includes('&')) return s;
   return s.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (whole, body: string) => {
-    if (body.startsWith('#x') || body.startsWith('#X')) {
-      return String.fromCodePoint(parseInt(body.slice(2), 16));
-    }
-    if (body.startsWith('#')) return String.fromCodePoint(parseInt(body.slice(1), 10));
+    if (body.startsWith('#x') || body.startsWith('#X')) return codePoint(parseInt(body.slice(2), 16), whole);
+    if (body.startsWith('#')) return codePoint(parseInt(body.slice(1), 10), whole);
     return ENTITY[body] ?? whole;
   });
+}
+
+/**
+ * A numeric entity outside Unicode is left as written rather than thrown at.
+ *
+ * `String.fromCodePoint` raises `RangeError` above U+10FFFF, and this parser is
+ * the *fatal* half of the load — the formula reader, the one failure the
+ * degraded path cannot absorb. A single malformed `&#99999999;` anywhere in a
+ * sheet would have failed the whole file, which is a lot of consequence for one
+ * bad entity in one label.
+ */
+function codePoint(n: number, whole: string): string {
+  return Number.isInteger(n) && n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : whole;
 }
 
 /** Walk the document, yielding events in order. Comments and PIs are skipped. */

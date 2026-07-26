@@ -293,6 +293,7 @@ export function registerDates(): void {
     if (isErr(start)) return start;
     const end = serialArg(args, 1, ctx);
     if (isErr(end)) return end;
+    if (!inCalendar(start) || !inCalendar(end)) return ERR.num;
     const holidays = holidaySet(args, 2, ctx);
     if (isErr(holidays)) return holidays;
     const sys = sysOf(ctx);
@@ -313,12 +314,17 @@ export function registerDates(): void {
     if (isErr(days)) return days;
     const holidays = holidaySet(args, 2, ctx);
     if (isErr(holidays)) return holidays;
+    if (!inCalendar(start)) return ERR.num;
     const sys = sysOf(ctx);
     const step = days >= 0 ? 1 : -1;
     let remaining = Math.abs(trunc(days));
     let s = Math.floor(start);
     while (remaining > 0) {
       s += step;
+      // A day count that walks off the calendar is #NUM!, not an argument to
+      // keep counting towards. Without the bound `WORKDAY(1,1E9)` spins a
+      // billion times building a `Date` on each one, and the load never returns.
+      if (!inCalendar(s)) return ERR.num;
       const dow = new Date(serialToMs(s, sys)).getUTCDay();
       if (dow === 0 || dow === 6 || holidays.has(s)) continue;
       remaining--;
@@ -326,6 +332,17 @@ export function registerDates(): void {
     return s;
   });
 }
+
+/**
+ * Excel's calendar runs from serial 0 to 9999-12-31, and a date function handed
+ * anything past that answers #NUM!. Enforcing it is not pedantry: NETWORKDAYS
+ * and WORKDAY step one day at a time, so an out-of-range serial — which a
+ * mistyped cell or a misread column produces easily — is a loop of tens of
+ * millions of iterations. It read as a hang, which is the one failure a viewer
+ * cannot explain to anyone.
+ */
+const MAX_SERIAL = 2_958_465;
+const inCalendar = (serial: number): boolean => serial >= 0 && serial <= MAX_SERIAL;
 
 function holidaySet(args: EvalValue[], i: number, ctx: FnContext): Set<number> | ExcelError {
   const out = new Set<number>();

@@ -56,6 +56,16 @@ describe('references', () => {
     expect(round('E4:B2')).toBe('B2:E4');
   });
 
+  it('carries the $ with the coordinate when it reverses a range', () => {
+    // The anchor belongs to the column or row, not to the corner it was written
+    // in. Swapping the numbers alone left each `$` behind, which names the same
+    // rectangle today and different cells the moment a shared formula moves it:
+    // one row and column over, `$B2:A$1` went to `$A2:C$2` instead of `B$1:$B3`.
+    expect(round('$B2:A$1')).toBe('A$1:$B2');
+    const moved = unparse(translate(parseFormula('$B2:A$1'), 1, 1, MAX_ROWS, MAX_COLS));
+    expect(moved).toBe('B$1:$B3');
+  });
+
   it('parses quoted cross-sheet references', () => {
     expect(round("'Income Statement'!F4")).toBe("'Income Statement'!F4");
     expect(round('Sheet1!A1:B2')).toBe('Sheet1!A1:B2');

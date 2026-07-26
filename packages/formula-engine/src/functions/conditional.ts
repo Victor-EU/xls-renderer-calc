@@ -12,7 +12,7 @@ import { type FnContext } from '../interpreter.js';
 import { MAX_COLS, MAX_ROWS } from '../a1.js';
 import { ERR, ExcelError, isErr, Matrix, RefValue, type EvalValue, type Scalar } from '../values.js';
 import { fn } from './registry.js';
-import { asMatrix, asRef } from './util.js';
+import { asMatrix, asRef, maxOf, minOf } from './util.js';
 import { wildcardToRegExp } from './text.js';
 
 export type Predicate = (v: Scalar) => boolean;
@@ -133,6 +133,38 @@ function overCriteria(
   return new Matrix(shaped.rows, shaped.cols, out);
 }
 
+/**
+ * Excel's sum/average range is a *corner*, not a range.
+ *
+ * `SUMIF(C1:P56, x, P1:P56)` does not sum the 56 cells of P1:P56. Excel takes
+ * the top-left of the third argument and reshapes it to the criteria range's
+ * dimensions — here 56 rows by 14 columns, so P1:AC56 — and pairs the two
+ * position by position. Authors reach this by dragging a formula sideways
+ * until the criteria range grows and the sum range does not, which is common
+ * enough that Excel made it work rather than an error.
+ *
+ * Reading the values alone cannot reproduce it, because the extra columns
+ * were never fetched. Indexing a 56-cell matrix by a position that runs to
+ * 784 silently finds nothing and contributes nothing, which is how a board
+ * pack came to show 0 where Excel shows 89,263 — a plausible number, no
+ * warning, on 71 cells. So this resolves the *reference* and re-reads it at
+ * the shape Excel would use.
+ *
+ * It applies to the whole family, not just SUMIF. SUMIFS, AVERAGEIFS, MAXIFS
+ * and MINIFS take their aggregate range *first* and were reading it as-is, so
+ * `SUMIFS(E1,C1:D3,1)` aggregated the single cell E1 and answered 10 where
+ * Excel reshapes E1 to E1:F3 and answers 170. Same bug, four functions, and
+ * the four that hid it longest are the ones a real model reaches for most.
+ */
+function align(arg: EvalValue, range: Matrix, ctx: FnContext): Matrix | ExcelError {
+  const ref = asRef(arg);
+  if (!ref || (ref.rows === range.rows && ref.cols === range.cols)) return asMatrix(arg, ctx);
+  const bottom = ref.top + range.rows - 1;
+  const right = ref.left + range.cols - 1;
+  if (bottom > MAX_ROWS || right > MAX_COLS) return ERR.ref;
+  return asMatrix(new RefValue(ref.sheet, ref.top, ref.left, bottom, right), ctx);
+}
+
 export function registerConditional(): void {
   fn('COUNTIF', 2, 2, (args, ctx) => {
     const range = asMatrix(args[0]!, ctx);
@@ -144,32 +176,6 @@ export function registerConditional(): void {
       return n;
     });
   });
-
-  /**
-   * Excel's sum/average range is a *corner*, not a range.
-   *
-   * `SUMIF(C1:P56, x, P1:P56)` does not sum the 56 cells of P1:P56. Excel takes
-   * the top-left of the third argument and reshapes it to the criteria range's
-   * dimensions — here 56 rows by 14 columns, so P1:AC56 — and pairs the two
-   * position by position. Authors reach this by dragging a formula sideways
-   * until the criteria range grows and the sum range does not, which is common
-   * enough that Excel made it work rather than an error.
-   *
-   * Reading the values alone cannot reproduce it, because the extra columns
-   * were never fetched. Indexing a 56-cell matrix by a position that runs to
-   * 784 silently finds nothing and contributes nothing, which is how a board
-   * pack came to show 0 where Excel shows 89,263 — a plausible number, no
-   * warning, on 71 cells. So this resolves the *reference* and re-reads it at
-   * the shape Excel would use.
-   */
-  function align(arg: EvalValue, range: Matrix, ctx: FnContext): Matrix | ExcelError {
-    const ref = asRef(arg);
-    if (!ref || (ref.rows === range.rows && ref.cols === range.cols)) return asMatrix(arg, ctx);
-    const bottom = ref.top + range.rows - 1;
-    const right = ref.left + range.cols - 1;
-    if (bottom > MAX_ROWS || right > MAX_COLS) return ERR.ref;
-    return asMatrix(new RefValue(ref.sheet, ref.top, ref.left, bottom, right), ctx);
-  }
 
   fn('SUMIF', 2, 3, (args, ctx) => {
     const range = asMatrix(args[0]!, ctx);
@@ -267,7 +273,11 @@ function aggregateIfs(
   ctx: FnContext,
   mode: 'sum' | 'average' | 'max' | 'min',
 ): Scalar {
-  const target = asMatrix(args[0]!, ctx);
+  // The aggregate range is reshaped to the first criteria range, exactly as
+  // SUMIF's third argument is — see `align`.
+  const first = asMatrix(args[1]!, ctx);
+  if (isErr(first)) return first;
+  const target = align(args[0]!, first, ctx);
   if (isErr(target)) return target;
   const idx = multiMatch(args, ctx, 1);
   if (!Array.isArray(idx)) return idx;
@@ -284,8 +294,8 @@ function aggregateIfs(
     case 'average':
       return picked.length ? picked.reduce((a, b) => a + b, 0) / picked.length : ERR.div0;
     case 'max':
-      return picked.length ? Math.max(...picked) : 0;
+      return picked.length ? maxOf(picked) : 0;
     default:
-      return picked.length ? Math.min(...picked) : 0;
+      return picked.length ? minOf(picked) : 0;
   }
 }

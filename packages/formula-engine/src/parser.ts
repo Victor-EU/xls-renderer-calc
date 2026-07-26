@@ -301,17 +301,30 @@ class Parser {
       this.fail('mismatched range endpoints', at.pos);
     }
     // Normalise so top-left comes first; Excel accepts B2:A1.
+    //
+    // The `$` travels with the coordinate, not with the corner. Swapping the
+    // numbers alone left each anchor behind: `$B2:A$1` normalised to `$A1:B$2`,
+    // where Excel gives `A$1:$B2` — the same rectangle today, and different
+    // cells the moment a shared formula translates it, because the wrong column
+    // is pinned. One row and column over, ours read `$A2:C$2` against Excel's
+    // `B$1:$B3`.
     const lo: CellRef = { ...a };
     const hi: CellRef = { ...b };
     if (!a.rowOnly && lo.col > hi.col) {
-      const t = lo.col;
+      const col = lo.col;
+      const abs = lo.absCol;
       lo.col = hi.col;
-      hi.col = t;
+      lo.absCol = hi.absCol;
+      hi.col = col;
+      hi.absCol = abs;
     }
     if (!a.colOnly && lo.row > hi.row) {
-      const t = lo.row;
+      const row = lo.row;
+      const abs = lo.absRow;
       lo.row = hi.row;
-      hi.row = t;
+      lo.absRow = hi.absRow;
+      hi.row = row;
+      hi.absRow = abs;
     }
     if (a.colOnly) {
       lo.row = 1;

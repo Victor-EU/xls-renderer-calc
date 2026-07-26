@@ -15,11 +15,10 @@
 
 import { compare } from '../coerce.js';
 import { Unsupported } from '../errors.js';
-import { scalarOf, type FnContext } from '../interpreter.js';
+import { isMissingArg, scalarOf, type FnContext } from '../interpreter.js';
 import { ERR, ExcelError, isErr, isRef, Matrix, RefValue, type EvalValue, type Scalar } from '../values.js';
 import { fn } from './registry.js';
 import { asMatrix, asRef, num, optNum, trunc } from './util.js';
-import { makeCriteria } from './conditional.js';
 import { wildcardToRegExp } from './text.js';
 
 export function registerLookup(): void {
@@ -115,7 +114,12 @@ export function registerLookup(): void {
     const vals = [...lookupArr.values()];
     const idx = xmatchIndex(key, vals, trunc(matchMode), trunc(searchMode));
     if (isErr(idx)) {
-      if (idx.kind === '#N/A' && args[3] !== undefined) return scalarOf(args[3]!, ctx);
+      // `XLOOKUP(k,a,b,,0)` writes the 4th argument as omitted, which is not the
+      // same as supplying a blank fallback: Excel still answers #N/A. Testing
+      // `!== undefined` alone treated the sentinel as a supplied value.
+      if (idx.kind === '#N/A' && args[3] !== undefined && !isMissingArg(args[3])) {
+        return scalarOf(args[3], ctx);
+      }
       return idx;
     }
     // The return array may be a whole row or column wider than the lookup one.
@@ -246,8 +250,18 @@ function matchIndex(key: Scalar, vals: Scalar[], type: number, who: string): num
       }
       return ERR.na;
     }
-    const pred = makeCriteria(key);
-    for (let i = 0; i < vals.length; i++) if (pred(vals[i]!)) return i;
+    // Exact match is equality, not a criteria expression.
+    //
+    // Routing it through `makeCriteria` — the *IF family's miniature language —
+    // meant a key that happens to start with a comparison operator stopped being
+    // a key: `MATCH(">5",A1:A3,0)` looked for the first value above 5 instead of
+    // for the literal text ">5", and `MATCH("<>",…,0)` matched the first
+    // non-empty cell instead of answering #N/A. Bucket labels in a real model
+    // read exactly like that — ">90 days", "<1 yr" — and the wrong row is a
+    // number, which is the failure mode with no symptom. `compare` is also
+    // stricter in the right direction: it keeps `MATCH("5",…,0)` off a numeric 5,
+    // where the criteria parser coerced the text and matched.
+    for (let i = 0; i < vals.length; i++) if (compare(vals[i]!, key) === 0) return i;
     return ERR.na;
   }
 

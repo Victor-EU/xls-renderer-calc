@@ -13,7 +13,7 @@
  */
 
 import { format as numFormat, formatColor } from 'numfmt';
-import { isErr, serialToDate, type Scalar } from '@xlscalc/formula-engine';
+import { isErr, numberToText, serialToDate, type Scalar } from '@xlscalc/formula-engine';
 import type { OverlayCell } from './bind.js';
 import type { CellContentData, RichRun } from './layout.js';
 
@@ -67,12 +67,26 @@ function formatNumber(value: number, numFmt: string | undefined, date1904: boole
   }
 }
 
-/** Excel's General display: 15 significant digits, trailing zeros dropped. */
+/**
+ * Excel's General display: 15 significant digits, trailing zeros dropped.
+ *
+ * This is the engine's `numberToText`, not a second implementation of it. There
+ * were two, and the one here was wrong: it stripped trailing zeros off the
+ * output of `toPrecision(15)` without noticing that the output may be in
+ * exponential form, where the last character is part of the *exponent*. So a
+ * cell holding 1e20 rendered as `1.00000000000000e+2` — a confidently wrong
+ * number, eighteen orders of magnitude out, with no warning attached. Every
+ * exponent ending in a zero was affected: 1e20, 1e-10, 3e-20.
+ *
+ * Delegating also makes the renderer and the engine agree by construction, which
+ * matters beyond this bug: `plainText` decides whether a computed value differs
+ * from the file's cached one, and two General renderers that disagree would
+ * report mismatches that are only a formatting difference.
+ */
 function generalText(value: number): string {
   if (!Number.isFinite(value)) return String(value);
   if (Number.isInteger(value) && Math.abs(value) < 1e15) return String(value);
-  const s = value.toPrecision(15);
-  return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
+  return numberToText(value);
 }
 
 export interface ResolveOptions {

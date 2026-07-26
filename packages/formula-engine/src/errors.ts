@@ -25,7 +25,18 @@ export type UnsupportedCode =
   /** A workbook-level feature (1904 dates, external links, array formulas...). */
   | 'FEATURE'
   /** Evaluation exceeded a guard (recursion, iteration, range explosion). */
-  | 'LIMIT';
+  | 'LIMIT'
+  /**
+   * A defect in this engine, caught at the cell that hit it.
+   *
+   * Every other code is a decision; this one is a bug, and it is a distinct
+   * code so it reads as one in the gap report rather than hiding among the
+   * honest refusals. It exists because the alternative was worse: an unforeseen
+   * `TypeError` used to unwind `evaluateAll` entirely, so one malformed formula
+   * in one cell rendered the whole workbook as nothing. Refusing the cell keeps
+   * the other 138,000 on screen and still says, loudly, that we broke.
+   */
+  | 'INTERNAL';
 
 export class Unsupported extends Error {
   override readonly name = 'Unsupported';

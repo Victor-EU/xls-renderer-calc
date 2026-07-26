@@ -21,6 +21,7 @@ import {
   layoutKey,
   loadXlsx,
   renderToHtml,
+  plainText,
   toSnapshot,
   type PreviewDocument,
 } from '../src/index.js';
@@ -70,6 +71,25 @@ describe('layout is plain data', () => {
     expect(layout.colWidths[1]).toBeGreaterThan(0);
     expect(layout.rowHeights[1]).toBeGreaterThan(0);
     expect(layout.styleAt.size).toBe(0);
+  });
+});
+
+describe('General rendering', () => {
+  it('does not mangle a number that renders in exponential form', () => {
+    // There were two General implementations, and this one stripped trailing
+    // zeros off `toPrecision(15)` without noticing the output may be
+    // exponential, where the last character belongs to the *exponent*. A cell
+    // holding 1e20 rendered as `1.00000000000000e+2` — eighteen orders of
+    // magnitude out, presented as a value, which is the one thing this project
+    // exists to prevent. It now delegates to the engine, so there is one.
+    expect(plainText(1e20)).toBe('1E+20');
+    expect(plainText(1.5e20)).toBe('1.5E+20');
+    expect(plainText(3e-20)).toBe('3E-20');
+    expect(plainText(1e-10)).toBe('0.0000000001');
+    expect(plainText(1e15)).toBe('1000000000000000');
+    // the ordinary cases are unchanged
+    expect(plainText(1234)).toBe('1234');
+    expect(plainText(0.1 + 0.2)).toBe('0.3');
   });
 });
 

@@ -2,7 +2,7 @@ import { textToNumber, toBool } from '../coerce.js';
 import { type FnContext } from '../interpreter.js';
 import { ERR, ExcelError, isErr, type EvalValue, type Scalar } from '../values.js';
 import { fn } from './registry.js';
-import { arg1, asMatrix, collectNumbers, collectNumbersA, flatten, num, optNum, trunc } from './util.js';
+import { arg1, asMatrix, collectNumbers, collectNumbersA, flatten, maxOf, minOf, num, optNum, trunc } from './util.js';
 import { excelRound } from './math.js';
 
 export function registerStats(): void {
@@ -15,10 +15,10 @@ export function registerStats(): void {
   overNumbers('AVERAGE', (ns) => (ns.length ? ns.reduce((a, b) => a + b, 0) / ns.length : ERR.div0));
   overNumbers('AVERAGEA', (ns) => (ns.length ? ns.reduce((a, b) => a + b, 0) / ns.length : ERR.div0), 'a');
   // MIN/MAX over an empty set are 0 in Excel, not an error.
-  overNumbers('MIN', (ns) => (ns.length ? Math.min(...ns) : 0));
-  overNumbers('MAX', (ns) => (ns.length ? Math.max(...ns) : 0));
-  overNumbers('MINA', (ns) => (ns.length ? Math.min(...ns) : 0), 'a');
-  overNumbers('MAXA', (ns) => (ns.length ? Math.max(...ns) : 0), 'a');
+  overNumbers('MIN', (ns) => (ns.length ? minOf(ns) : 0));
+  overNumbers('MAX', (ns) => (ns.length ? maxOf(ns) : 0));
+  overNumbers('MINA', (ns) => (ns.length ? minOf(ns) : 0), 'a');
+  overNumbers('MAXA', (ns) => (ns.length ? maxOf(ns) : 0), 'a');
   overNumbers('MEDIAN', (ns) => {
     if (!ns.length) return ERR.num;
     const s = [...ns].sort((a, b) => a - b);

@@ -263,6 +263,20 @@ export function materialize(ref: RefValue, ctx: FnContext): Matrix {
  * saved files, so it never spills).
  */
 export function deref(v: EvalValue, ctx: FnContext): Scalar | Matrix {
+  // An omitted argument reads as blank the moment anyone asks it for a value.
+  //
+  // `MISSING` is a Symbol so that `flatten` and `optNum` can tell "not written"
+  // from "written and empty" — a real distinction, and worth a sentinel. But a
+  // Symbol is not a `Scalar`, and every function that reached for a value
+  // through `scalarOf` without checking first got one anyway: `=VLOOKUP(A1,T,2,)`
+  // threw `v.toUpperCase is not a function`, `=CONCATENATE("a",,"b")` threw
+  // "Cannot convert a Symbol value to a number", and because neither is an
+  // `Unsupported`, both escaped `evaluateAll` and took the whole workbook with
+  // them. `=XLOOKUP(k,a,b,,0)` was worse: it stored the Symbol as a cell value,
+  // where it survived until `structuredClone` refused it and the Worker's load
+  // rejected. Blanking it here is the one place that covers all of them — and
+  // blank is what Excel reads a trailing comma as anyway.
+  if (isMissingArg(v)) return null;
   if (isRef(v)) {
     if (v.isSingleCell) return ctx.host.cellValue(v.sheet, v.top, v.left);
     return ctx.arrayMode ? materialize(v, ctx) : implicitIntersect(v, ctx);
