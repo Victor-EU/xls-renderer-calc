@@ -16,6 +16,7 @@ project's oldest ground truth. Two are new:
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -24,7 +25,14 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 ROOT = Path(__file__).resolve().parents[2]
 PUBLIC = ROOT / "apps" / "demo" / "public"
-SPIKE = Path("/Users/vz/OSS excel render tests/public")
+
+# Two of the demo fixtures predate this project: they come from the renderer
+# spike this one grew out of, and they are the oldest ground truth here, which is
+# why they are copied rather than regenerated. They are also already committed
+# under apps/demo/public, so this only matters if you are rebuilding them — point
+# XLSCALC_SPIKE_DIR at the spike's `public/` if you have it, and if you do not,
+# the copies in the repository are what you want anyway.
+SPIKE = Path(os.environ.get("XLSCALC_SPIKE_DIR", ""))
 
 HDR = Font(bold=True, color="FFFFFF")
 HDR_FILL = PatternFill("solid", fgColor="1F3864")
@@ -172,12 +180,14 @@ def formula_tour() -> Workbook:
 def main() -> None:
     PUBLIC.mkdir(parents=True, exist_ok=True)
     for name in ("financial-model.xlsx", "financial-model-nocache.xlsx"):
-        src = SPIKE / name
-        if src.exists():
+        src = SPIKE / name if SPIKE.name else None
+        if src is not None and src.exists():
             shutil.copy(src, PUBLIC / name)
             print(f"  copied  {name}")
+        elif (PUBLIC / name).exists():
+            print(f"  kept    {name} (already in the repository)")
         else:
-            print(f"  MISSING {name} (spike fixture not found at {src})")
+            print(f"  MISSING {name} — set XLSCALC_SPIKE_DIR to the spike's public/ dir")
 
     hardcoded_total().save(PUBLIC / "hardcoded-total.xlsx")
     print("  wrote   hardcoded-total.xlsx")

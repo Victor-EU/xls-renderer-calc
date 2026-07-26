@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor both packages advertise in `engines`, and current LTS. A
+        # library that claims Node 18 and is only ever run on 22 is claiming
+        # something nobody checked.
+        node: ["18", "22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      # typecheck → tests → build → smoke the published specifiers. The smoke is
+      # the part that matters here: the suite runs against `src` through Vite
+      # aliases and proves nothing about the artefact a consumer installs.
+      - run: npm run verify
+
+      # What this job does NOT cover, stated rather than implied: the oracle and
+      # the synthetic corpus both need LibreOffice and generated fixtures, and
+      # `describe.skipIf` quietly skips them when the fixtures are absent. They
+      # run in the release workflow, where the cost is worth paying. A green tick
+      # here means the engine's own tests, the types, the build and the package
+      # surface — not the differential harnesses.
+      - name: Say which suites were skipped
+        run: |
+          echo "Oracle and eval-corpus suites skip without LibreOffice fixtures."
+          echo "They are gated on release; see .github/workflows/release.yml"

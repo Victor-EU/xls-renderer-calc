@@ -61,13 +61,13 @@ symmetric — if one of these starts matching, that fails too.
 
 | model | cells | formulas | parse | evaluate |
 |---|---:|---:|---:|---:|
-| `m01_budget` | 739 | 470 | 88 ms | 30 ms |
-| `m02_valuation_dcf` | 365 | 220 | 21 ms | 10 ms |
-| `m03_lbo` | 539 | 362 | 31 ms | 16 ms |
-| `m04_three_statement` | 409 | 291 | 16 ms | 4 ms |
-| `m05_workflow_approvals` | 4,035 | 2,310 | 80 ms | 112 ms |
-| `m06_sales_data` | 40,395 | 24,224 | 227 ms | 362 ms |
-| `m07_cohort_retention` | 1,096 | 918 | 11 ms | 11 ms |
-| `m08_loan_amortization` | 5,696 | 5,233 | 35 ms | 63 ms |
-| `m09_inventory_planning` | 4,427 | 2,934 | 25 ms | 63 ms |
-| `m10_edge_cases` | 575 | 136 | 8 ms | 3 ms |
+| `m01_budget` | 739 | 470 | 30 ms | 15 ms |
+| `m02_valuation_dcf` | 365 | 220 | 12 ms | 5 ms |
+| `m03_lbo` | 539 | 362 | 12 ms | 5 ms |
+| `m04_three_statement` | 409 | 291 | 17 ms | 2 ms |
+| `m05_workflow_approvals` | 4,035 | 2,310 | 33 ms | 75 ms |
+| `m06_sales_data` | 40,395 | 24,224 | 172 ms | 309 ms |
+| `m07_cohort_retention` | 1,096 | 918 | 9 ms | 15 ms |
+| `m08_loan_amortization` | 5,696 | 5,233 | 27 ms | 63 ms |
+| `m09_inventory_planning` | 4,427 | 2,934 | 17 ms | 61 ms |
+| `m10_edge_cases` | 575 | 136 | 6 ms | 4 ms |

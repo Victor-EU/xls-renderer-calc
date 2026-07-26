@@ -1,0 +1,99 @@
+name: Release to npm
+
+# Tag a release and this publishes it:
+#
+#     npm version 0.3.0 --workspaces --include-workspace-root   (or edit by hand)
+#     git commit -am "Release 0.3.0" && git tag v0.3.0 && git push --follow-tags
+#
+# `workflow_dispatch` runs everything except the publish, which is the only way
+# to find out whether a release *would* work without spending a version number
+# to learn it.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Provenance. npm links the published tarball to the workflow run and the
+  # commit that produced it, and shows "Built and signed on GitHub Actions" on
+  # the package page. It needs a public repository, which this now is — the
+  # sibling Telbase project has this line commented out for exactly that reason.
+  # For a library whose whole claim is that you can trust its numbers, being able
+  # to prove which source built the artefact is not decoration.
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+
+      - run: npm ci
+
+      # ── The tag must be the version, or the release is a lie ────────────────
+      # A mis-tagged release is unfixable after the fact: npm versions are
+      # immutable, so `v0.3.0` publishing 0.2.0 costs a version number and leaves
+      # a permanently wrong tag. Cheaper to fail here.
+      - name: Tag matches the manifests
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: node scripts/check-release-version.mjs
+
+      # ── The harnesses CI cannot afford to run on every push ─────────────────
+      # `npm run verify` alone would skip both of these, silently, because
+      # `describe.skipIf` treats missing fixtures as "not applicable". On a
+      # release that skip is the difference between a gate and a formality — the
+      # oracle and the corpus are the evidence this project rests on, so a
+      # release regenerates both from source and runs them against LibreOffice.
+      - name: Install LibreOffice and openpyxl
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libreoffice-calc
+          python3 -m pip install --quiet --break-system-packages openpyxl
+          soffice --version
+
+      - name: Rebuild the oracle and eval fixtures
+        run: |
+          python3 tools/oracle/generate.py
+          python3 eval/build.py
+
+      - name: Verify, with every suite actually running
+        run: |
+          npm run verify
+          npx vitest run tools/oracle/ eval/ --reporter=json --outputFile=harness.json
+          node scripts/check-harnesses-ran.mjs harness.json
+
+      # ── Publish: engine first ───────────────────────────────────────────────
+      # Order is not cosmetic. The preview depends on the engine, so if the
+      # engine fails to publish the job stops here and the preview never reaches
+      # the registry — which is the right failure. The other order would leave a
+      # package whose dependency does not exist.
+      - name: Publish @xlscalc/formula-engine
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm publish -w @xlscalc/formula-engine --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish @xlscalc/xlsx-preview
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm publish -w @xlscalc/xlsx-preview --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # A dry run should still show what would have shipped — the file list is
+      # where packaging mistakes are visible (a missing CAPABILITY.md, a stray
+      # test file, sources that source maps point at and nobody received).
+      - name: What would have shipped
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          npm pack -w @xlscalc/formula-engine --dry-run
+          npm pack -w @xlscalc/xlsx-preview --dry-run
