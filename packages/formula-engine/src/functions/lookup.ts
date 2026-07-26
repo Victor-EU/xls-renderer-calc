@@ -18,7 +18,7 @@ import { Unsupported } from '../errors.js';
 import { scalarOf, type FnContext } from '../interpreter.js';
 import { ERR, ExcelError, isErr, isRef, Matrix, RefValue, type EvalValue, type Scalar } from '../values.js';
 import { fn } from './registry.js';
-import { asMatrix, num, optNum, trunc } from './util.js';
+import { asMatrix, asRef, num, optNum, trunc } from './util.js';
 import { makeCriteria } from './conditional.js';
 import { wildcardToRegExp } from './text.js';
 
@@ -39,8 +39,6 @@ export function registerLookup(): void {
   });
 
   fn('INDEX', 2, 3, (args, ctx) => {
-    const arr = asMatrix(args[0]!, ctx);
-    if (isErr(arr)) return arr;
     const r = num(args, 1, ctx);
     if (isErr(r)) return r;
     const c = optNum(args, 2, ctx, 0);
@@ -49,6 +47,27 @@ export function registerLookup(): void {
     const row = trunc(r);
     const col = trunc(c);
     if (row < 0 || col < 0) return ERR.value;
+
+    // A whole-column or whole-row reference names far more cells than we
+    // materialise, and INDEX addresses it by position. Resolve the position
+    // against the extent the formula wrote and read that one cell, rather than
+    // against the clamped rectangle — where a row below the used range looks
+    // out of range and becomes #REF!, which is what a real board pack hit.
+    // Reading a single cell is also strictly cheaper than materialising.
+    const ref = asRef(args[0]!);
+    if (ref?.isClamped) {
+      const spot = locate(ref.declaredRows, ref.declaredCols, row, col, args[2] === undefined);
+      if (spot === 'out-of-range') return ERR.ref;
+      if (spot !== 'array') {
+        return ctx.host.cellValue(ref.sheet, ref.top + spot.row - 1, ref.left + spot.col - 1);
+      }
+      // An array result from a whole-column reference would be a million cells.
+      // Fall through to the clamped rectangle, which holds every value there is
+      // — the remainder is empty by definition of the used range.
+    }
+
+    const arr = asMatrix(args[0]!, ctx);
+    if (isErr(arr)) return arr;
 
     // A single-row or single-column source lets INDEX take one index only.
     if (args[2] === undefined && arr.rows === 1 && arr.cols > 1) {
@@ -131,11 +150,17 @@ export function registerLookup(): void {
     const r = args[0]!;
     return isRef(r) ? r.left : ERR.value;
   });
+  // ROWS and COLUMNS report the extent the formula named, not the rectangle we
+  // chose to read. `ROWS(A:A)` is 1048576 in Excel however empty the column is.
   fn('ROWS', 1, 1, (args, ctx) => {
+    const ref = asRef(args[0]!);
+    if (ref) return ref.declaredRows;
     const m = asMatrix(args[0]!, ctx);
     return isErr(m) ? m : m.rows;
   });
   fn('COLUMNS', 1, 1, (args, ctx) => {
+    const ref = asRef(args[0]!);
+    if (ref) return ref.declaredCols;
     const m = asMatrix(args[0]!, ctx);
     return isErr(m) ? m : m.cols;
   });
@@ -329,6 +354,35 @@ const vectorOf = (m: Matrix, which: 'first' | 'last'): Scalar[] => {
   }
   return which === 'first' ? columnOf(m, 0) : columnOf(m, m.cols - 1);
 };
+
+/**
+ * Resolve INDEX's one-or-two indices to a 1-based position in a rows x cols
+ * source, mirroring the shorthand rules applied to a materialised matrix: a
+ * single index counts columns across a single row, rows down a single column,
+ * and otherwise selects a whole row.
+ */
+function locate(
+  rows: number,
+  cols: number,
+  row: number,
+  col: number,
+  singleIndex: boolean,
+): { row: number; col: number } | 'array' | 'out-of-range' {
+  let r = row;
+  let c = col;
+  if (singleIndex) {
+    if (rows === 1 && cols > 1) {
+      r = 1;
+      c = row;
+    } else if (cols === 1) {
+      r = row;
+      c = 1;
+    }
+  }
+  if (r === 0 || c === 0) return 'array';
+  if (r > rows || c > cols) return 'out-of-range';
+  return { row: r, col: c };
+}
 
 const pick = (m: Matrix, row: number, col: number): Scalar =>
   row > m.rows || col > m.cols ? ERR.ref : m.at(row - 1, col - 1);

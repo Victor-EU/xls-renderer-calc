@@ -134,7 +134,45 @@ export class RefValue {
     readonly left: number,
     readonly bottom: number,
     readonly right: number,
+    /**
+     * The extent the formula actually named, when it is larger than the one we
+     * will materialise.
+     *
+     * `A:A` names 1,048,576 rows. We clamp `bottom` to the used range, because
+     * reading the rest is unaffordable and iterating it is pointless — the
+     * cells are empty, so `SUM`, `COUNT` and `MATCH` get the same answer either
+     * way. That clamp is an implementation detail of *iteration*, and two kinds
+     * of function must not see it:
+     *
+     *   - those that report an extent — Excel's `ROWS(A:A)` is 1048576, not
+     *     however many rows happen to be occupied;
+     *   - those that index by position — `INDEX(Sheet!D:O, 63, 1)` is the cell
+     *     D63 whether or not anything has ever been written near it.
+     *
+     * Conflating the two made a board pack render `#REF!` where Excel finds an
+     * empty cell. Keeping the declared extent beside the clamped one lets each
+     * function ask for the one it actually means.
+     */
+    readonly declared?: { bottom: number; right: number },
   ) {}
+
+  /** The last row the formula named, which may be far below the used range. */
+  get declaredBottom(): number {
+    return this.declared?.bottom ?? this.bottom;
+  }
+  get declaredRight(): number {
+    return this.declared?.right ?? this.right;
+  }
+  get declaredRows(): number {
+    return this.declaredBottom - this.top + 1;
+  }
+  get declaredCols(): number {
+    return this.declaredRight - this.left + 1;
+  }
+  /** True when the clamp actually discarded something. */
+  get isClamped(): boolean {
+    return this.declaredBottom !== this.bottom || this.declaredRight !== this.right;
+  }
 
   static cell(sheet: number, row: number, col: number): RefValue {
     return new RefValue(sheet, row, col, row, col);

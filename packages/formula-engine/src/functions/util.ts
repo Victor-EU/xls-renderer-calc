@@ -165,6 +165,14 @@ export function asMatrix(v: EvalValue, ctx: FnContext): Matrix | ExcelError {
   if (isRef(v)) return materialize(v, ctx);
   if (isMatrix(v)) return v;
   if (v instanceof RefUnion) return ERR.value;
+  // An argument that *is* an error propagates; it does not become a
+  // one-cell range containing an error. The difference decides what a
+  // reference to a deleted sheet does: `COUNTA(Gone!A:A)` must be #REF!, and
+  // wrapping the error in a matrix made it count the error as one non-empty
+  // item and return 1 — a number, confidently, for a sheet that is not there.
+  // A cell that merely *holds* an error is unaffected: it arrives through
+  // materialize() as an element of the range, never as the bare argument.
+  if (isErr(v)) return v;
   return Matrix.scalar(v);
 }
 

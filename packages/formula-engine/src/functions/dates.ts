@@ -40,7 +40,13 @@ export function serialToMs(serial: number, sys: DateSystem): number {
 export function msToSerial(ms: number, sys: DateSystem): number {
   if (sys.date1904) return ms / MS_PER_DAY + EPOCH_1904;
   const naive = ms / MS_PER_DAY + EPOCH_1900;
-  return naive < 60 ? naive - 1 : naive;
+  // Every real date up to and including 1900-02-28 sits one ahead of its Excel
+  // serial, because Excel reserves serial 60 for a 29 February that never
+  // happened. The boundary is `<= 60`, not `< 60`: 1900-02-28 lands on naive 60
+  // and is serial 59. Getting it wrong shifted DATE() by a day across the whole
+  // January-February 1900 window — DATE(1900,2,28) came back as 60, which is
+  // the phantom day itself.
+  return naive <= 60 ? naive - 1 : naive;
 }
 
 /** Serial → a JS Date in UTC, for rendering. Never used inside evaluation. */
@@ -68,11 +74,25 @@ export function serialToYmd(serial: number, sys: DateSystem): Ymd {
   // built points date functions at empty cells constantly. Two real budgets in
   // the corpus do it 184 times between them.
   if (whole === 0 && !sys.date1904) return { y: 1900, m: 1, d: 0 };
+  // Serial 60 is 1900-02-29, the day Lotus 1-2-3 invented and Excel kept. No
+  // real instant corresponds to it, so it cannot come out of a Date; the
+  // rendering path already reports it (numfmt formats 60 as 1900-02-29) and the
+  // date functions have to agree, or DAY() and TEXT() describe different days.
+  if (whole === 60 && !sys.date1904) return { y: 1900, m: 2, d: 29 };
   const d = new Date(serialToMs(whole, sys));
   return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() };
 }
 
 export function ymdToSerial(y: number, m: number, d: number, sys: DateSystem): number {
+  // The phantom day again, in the other direction. Excel's February 1900 has a
+  // 29th, so both the way of naming it directly and the way EOMONTH names it —
+  // day 0 of the following month — have to land on serial 60, where Date.UTC
+  // would roll each of them to 1 March and answer 61.
+  if (!sys.date1904) {
+    const year = y + Math.floor((m - 1) / 12);
+    const month = (((m - 1) % 12) + 12) % 12 + 1;
+    if (year === 1900 && ((month === 2 && d === 29) || (month === 3 && d === 0))) return 60;
+  }
   // Date.UTC rolls out-of-range months and days exactly as Excel's DATE does.
   const ms = Date.UTC(y, m - 1, d);
   const serial = msToSerial(ms, sys);
@@ -223,7 +243,7 @@ export function registerDates(): void {
     if (isErr(end)) return end;
     const european = args[2] === undefined ? false : scalarOf(args[2]!, ctx) === true;
     const sys = sysOf(ctx);
-    return days360(serialToYmd(start, sys), serialToYmd(end, sys), european);
+    return days360(serialToYmd(start, sys), serialToYmd(end, sys), european, sys);
   });
 
   fn('DATEDIF', 3, 3, (args, ctx) => {
@@ -246,7 +266,7 @@ export function registerDates(): void {
       case 'Y':
         return Math.floor(completedMonths(a, b) / 12);
       case 'MD':
-        return b.d >= a.d ? b.d - a.d : b.d + daysInMonth(b.y, b.m - 1) - a.d;
+        return b.d >= a.d ? b.d - a.d : b.d + daysInMonth(b.y, b.m - 1, sys) - a.d;
       case 'YM':
         return completedMonths(a, b) % 12;
       case 'YD': {
@@ -328,12 +348,17 @@ function shiftMonths(args: EvalValue[], ctx: FnContext, endOfMonth: boolean): Sc
     // Day 0 of the following month is the last day of the target month.
     return ymdToSerial(y, targetMonth + 1, 0, sys);
   }
-  const clamped = Math.min(d, daysInMonth(y, targetMonth));
+  const clamped = Math.min(d, daysInMonth(y, targetMonth, sys));
   return ymdToSerial(y, targetMonth, clamped, sys);
 }
 
 /** `month` is 1-based and may be out of range; Date.UTC normalises it. */
-function daysInMonth(y: number, month: number): number {
+function daysInMonth(y: number, month: number, sys: DateSystem): number {
+  // February 1900 has 29 days in Excel's calendar and 28 in the real one, so
+  // EDATE landing on it must not clamp a 29th back to the 28th.
+  const year = y + Math.floor((month - 1) / 12);
+  const normalised = (((month - 1) % 12) + 12) % 12 + 1;
+  if (!sys.date1904 && year === 1900 && normalised === 2) return 29;
   return new Date(Date.UTC(y, month, 0)).getUTCDate();
 }
 
@@ -347,14 +372,14 @@ function afterAnniversary(a: Ymd, b: Ymd): boolean {
   return b.m > a.m || (b.m === a.m && b.d >= a.d);
 }
 
-function days360(a: Ymd, b: Ymd, european: boolean): number {
+function days360(a: Ymd, b: Ymd, european: boolean, sys: DateSystem): number {
   let d1 = a.d;
   let d2 = b.d;
   if (european) {
     d1 = Math.min(d1, 30);
     d2 = Math.min(d2, 30);
   } else {
-    if (d1 === 31 || (a.m === 2 && d1 === daysInMonth(a.y, 2))) d1 = 30;
+    if (d1 === 31 || (a.m === 2 && d1 === daysInMonth(a.y, 2, sys))) d1 = 30;
     if (d2 === 31) d2 = d1 === 30 ? 30 : 31;
   }
   return (b.y - a.y) * 360 + (b.m - a.m) * 30 + (d2 - d1);
@@ -367,7 +392,7 @@ export function yearFrac(start: number, end: number, basis: number, sys: DateSys
   const days = Math.floor(hi) - Math.floor(lo);
   switch (basis) {
     case 0:
-      return days360(a, b, false) / 360;
+      return days360(a, b, false, sys) / 360;
     case 1: {
       // Actual/actual. For a span of a year or less the denominator is 366 when
       // a 29 February falls inside it, otherwise 365; for longer spans it is the
@@ -386,7 +411,7 @@ export function yearFrac(start: number, end: number, basis: number, sys: DateSys
     case 3:
       return days / 365;
     case 4:
-      return days360(a, b, true) / 360;
+      return days360(a, b, true, sys) / 360;
     default:
       return ERR.num;
   }

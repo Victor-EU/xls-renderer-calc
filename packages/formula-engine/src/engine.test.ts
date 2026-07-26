@@ -347,3 +347,120 @@ describe('error values are values', () => {
     expect(isErr(wb.record(0, 1, 1)!.value)).toBe(true);
   });
 });
+
+/**
+ * A whole-column reference names far more cells than the engine materialises.
+ * The clamp to the used range is deliberate — expanding `A:A` literally is a
+ * million cells per edge, and materialising a graph that size caused an
+ * out-of-memory failure earlier in this project. But the clamp is a property of
+ * *iteration*, and these functions must not see it: a real board pack rendered
+ * #REF! where Excel finds an empty cell, because INDEX was indexing into the
+ * clamped rectangle rather than the range the formula named.
+ */
+describe('a whole-column reference keeps the extent it was declared with', () => {
+  const book = (): Workbook => {
+    const wb = new Workbook({ now: 45000 });
+    wb.addSheet('Main');
+    wb.addSheet('Short'); // used range stops at row 3
+    wb.setValue(1, 1, 4, 'd1');
+    wb.setValue(1, 2, 4, 'd2');
+    wb.setValue(1, 3, 4, 'd3');
+    for (let r = 1; r <= 80; r++) wb.setValue(0, r, 16, r); // Main!P1:P80
+    return wb;
+  };
+  const run = (formula: string): Scalar => {
+    const wb = book();
+    wb.setFormula(0, 200, 30, formula);
+    wb.evaluateAll();
+    return wb.record(0, 200, 30)!.value;
+  };
+
+  it('reports the declared height, not the occupied one', () => {
+    expect(run('=ROWS(P:P)')).toBe(1_048_576);
+    expect(run('=COLUMNS(1:1)')).toBe(16_384);
+  });
+
+  it('still reports a bounded range normally', () => {
+    expect(run('=ROWS(P1:P10)')).toBe(10);
+    expect(run('=COLUMNS(D:O)')).toBe(12);
+  });
+
+  it('indexes past the used range instead of failing', () => {
+    // Short!D63 is empty and far below anything written. Excel reads the cell.
+    expect(run("=INDEX(Short!D:O,63,1)")).toBe(0);
+    expect(run("=INDEX(Short!D:O,2,1)")).toBe('d2');
+  });
+
+  it('leaves the aggregates alone — the clamp is right for them', () => {
+    expect(run('=SUM(P:P)')).toBe(3240);
+    expect(run('=COUNT(P:P)')).toBe(80);
+    expect(run('=MATCH(63,P:P,0)')).toBe(63);
+  });
+});
+
+/**
+ * An argument that *is* an error propagates; it does not become a one-cell
+ * range containing an error. A reference to a sheet that is not there made
+ * COUNTA return 1 — a number, confidently, for a workbook that cannot be read.
+ */
+describe('a broken reference propagates rather than becoming a value', () => {
+  it('reports #REF! from a lookup over a missing sheet', () => {
+    const wb = new Workbook({ now: 45000 });
+    wb.addSheet('S');
+    wb.setValue(0, 2, 1, 5);
+    wb.setFormula(0, 10, 5, '=MATCH(5,Gone!A1:B2,0)');
+    wb.setFormula(0, 11, 5, '=SUM(Gone!A1:B2)');
+    wb.evaluateAll();
+    expect((wb.record(0, 10, 5)!.value as { kind: string }).kind).toBe('#REF!');
+    expect((wb.record(0, 11, 5)!.value as { kind: string }).kind).toBe('#REF!');
+  });
+});
+
+/**
+ * Excel's 1900 calendar has two days that never existed, and both have to be
+ * reproduced or dates disagree with every file that carries them.
+ *
+ * Serial 0 is "January 0, 1900", the placeholder before 1900-01-01. It matters
+ * far more than its obscurity suggests, because an empty cell coerces to 0 and
+ * half-built models point date functions at empty cells constantly — two real
+ * budgets do it 184 times between them.
+ *
+ * Serial 60 is 1900-02-29, inherited from Lotus 1-2-3. `numfmt`, which renders
+ * this project's number formats and is an independent Excel-compatible
+ * implementation, formats 0 as `1900-01-00` and 60 as `1900-02-29`; the date
+ * functions have to agree with the renderer or DAY() and TEXT() describe
+ * different days.
+ */
+describe("Excel's two impossible days", () => {
+  it('treats serial 0 as January 0, 1900', () => {
+    expect(calc('=YEAR(0)')).toBe(1900);
+    expect(calc('=MONTH(0)')).toBe(1);
+    expect(calc('=DAY(0)')).toBe(0);
+    // The reason it matters: an empty cell is 0, and the month must be January.
+    expect(calc('=EOMONTH(Z90,0)')).toBe(31);
+  });
+
+  it('treats serial 60 as the phantom 29 February 1900', () => {
+    expect(calc('=DAY(59)')).toBe(28);
+    expect(calc('=DAY(60)')).toBe(29);
+    expect(calc('=DAY(61)')).toBe(1);
+    expect(calc('=MONTH(60)')).toBe(2);
+  });
+
+  it('maps the January-February 1900 window back the same way', () => {
+    expect(calc('=DATE(1900,1,1)')).toBe(1);
+    expect(calc('=DATE(1900,2,28)')).toBe(59);
+    expect(calc('=DATE(1900,2,29)')).toBe(60);
+    expect(calc('=DATE(1900,3,1)')).toBe(61);
+    // February 1900 ends on the 29th in this calendar, so EOMONTH says 60.
+    expect(calc('=EOMONTH(45,0)')).toBe(60);
+  });
+
+  it('leaves ordinary dates untouched', () => {
+    expect(calc('=DATE(2026,7,25)')).toBe(46228);
+    expect(calc('=DATE(2026,2,28)')).toBe(46081);
+    // 2026 is not a leap year, so a month-end roll from 31 January lands on the
+    // 28th — the ordinary version of the rule the 1900 cases bend.
+    expect(calc('=EOMONTH(DATE(2026,1,31),1)')).toBe(46081);
+  });
+});

@@ -905,7 +905,46 @@ doctrine "never a wrong number" extends to "never nothing at all when we have
 the numbers": a styling failure is now recorded on the document and rendered
 around, and only a failure of the formula reader is fatal.
 
-### 12.8 ? What the corpora still cannot tell us
+### 12.8 ✓ What a second pass over the real corpus fixed
+
+The first pass declared two gaps rather than fixing them. Both are now closed,
+and closing them turned up three more bugs — which is the argument for declaring
+a gap precisely instead of describing it loosely.
+
+**The clamp had leaked out of iteration.** `A:A` names 1,048,576 rows; we clamp
+to the used range because reading the rest is unaffordable and iterating it is
+pointless — `SUM`, `COUNT` and `MATCH` get the same answer either way. But the
+clamp had become the reference's *identity*, so `ROWS(A:A)` answered 80 and
+`INDEX('Sheet'!$D:$O, 63, 1)` answered `#REF!` where Excel reads an empty cell.
+A `RefValue` now carries the extent it was **declared** with beside the
+rectangle we will read; extent-reporting and positional functions ask for the
+first, everything else keeps the second. `INDEX` also stopped materialising for
+the scalar case, so the fix is cheaper than what it replaced.
+
+**An errored argument was being wrapped instead of propagating.** `asMatrix`
+turned a bare error into a one-cell range containing an error, so `MATCH` over a
+deleted sheet reported "not found" rather than `#REF!` — and `COUNTA(Gone!A:A)`
+returned **1**, a number, confidently, for a sheet that is not there.
+
+**Excel has two impossible days and we had neither quite right.** Serial 0 is
+"January 0, 1900"; serial 60 is the phantom 1900-02-29 inherited from Lotus
+1-2-3. The engine reproduced the leap-day *offset* but reported the day itself
+as 28 February, disagreeing with its own renderer — `numfmt`, an independent
+Excel-compatible implementation, formats serial 60 as `1900-02-29` and serial 0
+as `1900-01-00`. Fixing the mapping in both directions exposed an off-by-one
+that had shifted the whole January–February 1900 window: `DATE(1900,2,28)`
+returned 60, the phantom day itself.
+
+**And the symmetric gate earned its keep a second time.** That last bug was
+sitting behind a *declared* oracle divergence — "LibreOffice has no phantom
+1900-02-29, so every date before 1900-03-01 sits one day off". Plausible, and
+false: the fixture shows LibreOffice answering 59 for `DATE(1900,2,28)`, the
+same as Excel. Both of us were right and only we were wrong. The moment the fix
+made the cell agree, the gate failed on the now-false declaration — exactly as
+it did for the `ROUND` ulp in §12.6. Two of the most stubborn bugs in this
+project were each wearing a paragraph explaining why they were unavoidable.
+
+### 12.9 ? What the corpora still cannot tell us
 
 Two oracle limits, both structural rather than fixable:
 
@@ -917,10 +956,23 @@ than let it dilute the gate.
 
 **Only one real workbook is Excel-authored.** Ten files is wide, not random, and
 everything graded against an export or a generator is graded against a second
-opinion. A cache can also be stale — recording what an application last
-computed, not what it would compute today. Nothing in the corpus looked stale;
-nothing rules it out. The honest summary is that the vocabulary claim is now
-evidenced rather than assumed, and the *precision* claim still rests on one file.
+opinion. The vocabulary claim is now evidenced rather than assumed; the
+*precision* claim still rests on one file.
+
+**A cache can be stale, and one of them is.** This was listed as a hypothetical
+risk when the corpus was built. It is now observed: 28 cells of the board pack
+record `#REF!` for formulas whose referenced cells demonstrably hold the numbers
+we compute — verified independently of the engine by walking the raw XML,
+redoing the MATCH positionally and summing the two or three INDEX terms in each
+formula (`eval/real/verify_index.py`, 26 of 26). The same formula shape resolves
+successfully in 117 other cells of that sheet, so it is not something the writer
+could not do. A file records what an application last computed, not what it
+would compute today.
+
+**Serial 0 is corroborated, not measured.** Sixteen Excel-authored workbooks on
+this machine were scanned and not one points a date function at an empty or zero
+cell, so nothing here settles Excel's answer directly. `numfmt` agreeing is
+strong, and it is still a second implementation rather than the thing itself.
 
 ---
 

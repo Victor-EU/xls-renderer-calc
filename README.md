@@ -21,7 +21,7 @@ generated financial model renders as a labelled skeleton. The previous fix was a
 server-side LibreOffice recalc, which costs the preview its two defining
 properties: no server, and nothing leaves the browser.
 
-**Status: built and verified.** 109 tests green; 399 oracle probes, a
+**Status: built and verified.** 118 tests green; 399 oracle probes, a
 **37,098-cell synthetic corpus of ten whole workbooks**, and a
 **202,795-cell corpus of ten *real* workbooks** — including a 138,421-formula
 business plan last saved by Excel itself — all at 100 % accuracy with zero
@@ -192,11 +192,11 @@ One of them was last saved by Microsoft Excel, which makes its 138,421 cached
 values the best ground truth this project has had.
 
 ```
-202,795 formula cells   answered 63.4%   accuracy 100.0%   unexplained 0
+202,795 formula cells   answered 63.6%   accuracy 100.0%   unexplained 0
 ```
 
-It found five more bugs, four of which the synthetic corpus could not have found
-in principle. The worst: **every formula in a shared range was reconstructed
+It found eight more bugs across two passes, most of which the synthetic corpus
+could not have found in principle. The worst: **every formula in a shared range was reconstructed
 without its parentheses.** OOXML stores `<f t="shared">` once and offsets it for
 each sibling; that path goes parse → translate → unparse, and `unparse` emitted
 binary operators with no brackets, because the grammar has no parenthesis node.
@@ -204,11 +204,20 @@ binary operators with no brackets, because the grammar has no parenthesis node.
 times too large. openpyxl writes every formula out in full, so no synthetic
 fixture could ever have exercised it.
 
-The finding that is not a bug: **36.6 % of that corpus renders ⚠**, and almost
+The finding that is not a bug: **36.4 % of that corpus renders ⚠**, and almost
 none of it is a missing function. In the business plan, **33 unsupported roots —
 21 `OFFSET`, 12 `CELL` — darken 64,809 cells**, just under half the workbook.
 Poisoning downstream is the right design; 1,964 dark cells per unsupported root
 is the number that decides whether it is usable.
+
+A second pass over the corpus fixed the reference model behind one of those
+warnings. A whole-column reference like `A:A` names 1,048,576 rows; the engine
+clamps it to the used range because iterating the rest is unaffordable and
+pointless. That clamp is a property of *iteration*, and it had leaked into the
+functions that report an extent or index by position — `ROWS(A:A)` answered 80
+instead of 1,048,576, and `INDEX('Sheet'!$D:$O, 63, 1)` answered `#REF!` where
+Excel reads an empty cell. A reference now carries the extent it was *declared*
+with alongside the rectangle we will actually read.
 
 Three behaviours the oracle pinned that would otherwise have been guesses:
 General-format text switches to scientific notation at `1E16` and `1E-15`
@@ -351,15 +360,6 @@ Stated plainly rather than buried:
   saved is ground truth. A file's cache can also be stale, recording what its
   application last computed rather than what it would compute today. Nothing
   here looked stale; nothing rules it out.
-- **A whole-column reference is clamped to the used range**, which is right for
-  `SUM` and wrong for the positional functions: `INDEX('Sheet'!$D:$O, 63, n)`
-  returns `#REF!` where Excel finds an empty cell. Clamping is deliberate —
-  expanding a column literally is a million cells per edge, and materialising a
-  graph that size is what caused an out-of-memory failure earlier in this
-  project. Both outcomes are a visible refusal rather than a wrong number, so
-  the doctrine holds; the fidelity does not. Declared and counted in
-  [`eval/real/divergences.json`](eval/real/divergences.json) so it cannot grow
-  unnoticed. Fixing it means teaching `RefValue` to remember where it came from.
 - **No iterative calculation.** A workbook that sets `iterate="1"` is asking for
   its circular references to be converged, which is the ordinary shape of
   interest on an average balance. We refuse them. The refusal is correct for an

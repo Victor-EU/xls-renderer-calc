@@ -82,11 +82,6 @@
     "ours": "1",
     "why": "LibreOffice has no phantom 1900-02-29, so every date before 1900-03-01 sits one day off Excel's serials. Excel's numbering is what the files carry."
   },
-  "dates:=DATE(1900,2,28)": {
-    "oracle": "60",
-    "ours": "59",
-    "why": "Same pre-1900-03-01 offset."
-  },
   "dates:=YEAR(H5)": {
     "oracle": "1899",
     "ours": "1900",

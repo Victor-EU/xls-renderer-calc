@@ -225,7 +225,14 @@ function resolveRef(node: Node & { k: 'ref' }, ctx: FnContext): EvalValue {
   const right = a.rowOnly ? Math.max(1, used.cols) : Math.max(a.col, b.col);
 
   if (top > MAX_ROWS || left > MAX_COLS) return ERR.ref;
-  const rect = new RefValue(sheet, top, left, Math.min(bottom, MAX_ROWS), Math.min(right, MAX_COLS));
+  // Keep what the formula named alongside what we will read. See RefValue.
+  const clampedBottom = Math.min(bottom, MAX_ROWS);
+  const clampedRight = Math.min(right, MAX_COLS);
+  const declared =
+    a.colOnly || a.rowOnly
+      ? { bottom: a.colOnly ? MAX_ROWS : clampedBottom, right: a.rowOnly ? MAX_COLS : clampedRight }
+      : undefined;
+  const rect = new RefValue(sheet, top, left, clampedBottom, clampedRight, declared);
   if (rect.cellCount > MAX_RANGE_CELLS) {
     throw new Unsupported('LIMIT', `range ${describeRect(rect, ctx)} covers too many cells`);
   }
