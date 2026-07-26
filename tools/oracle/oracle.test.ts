@@ -64,14 +64,43 @@ interface Outcome {
 
 const haveFixtures = existsSync(join(BUILD, 'spec.json')) && existsSync(join(BUILD, 'expected.json'));
 
-describe.skipIf(!haveFixtures)('LibreOffice oracle', () => {
-  const spec: Spec = JSON.parse(readFileSync(join(BUILD, 'spec.json'), 'utf8'));
-  const expected: Record<string, Expected[]> = JSON.parse(
-    readFileSync(join(BUILD, 'expected.json'), 'utf8'),
-  );
-  const divergences: Record<string, Divergence> = JSON.parse(
-    readFileSync(join(HERE, 'divergences.json'), 'utf8'),
-  );
+/**
+ * The fixtures are read out here, not inside the `describe`, and the difference
+ * is not stylistic.
+ *
+ * `describe.skipIf(cond)` still *executes* its callback — it collects the tests
+ * and then marks the results skipped. So a `readFileSync` in the body runs even
+ * when the condition says to skip, and this file threw `ENOENT` on every machine
+ * that had never run `generate.py`: which is every fresh clone, and flatly
+ * contradicted the promise in the header above. It went unnoticed for as long as
+ * everyone who ran the suite happened to have the fixtures already.
+ */
+const fixtures = haveFixtures
+  ? {
+      spec: JSON.parse(readFileSync(join(BUILD, 'spec.json'), 'utf8')) as Spec,
+      expected: JSON.parse(readFileSync(join(BUILD, 'expected.json'), 'utf8')) as Record<
+        string,
+        Expected[]
+      >,
+      divergences: JSON.parse(readFileSync(join(HERE, 'divergences.json'), 'utf8')) as Record<
+        string,
+        Divergence
+      >,
+    }
+  : undefined;
+
+// One visible skipped test rather than an empty file, so a run says *why* the
+// oracle scored nothing instead of reporting nothing at all.
+if (!fixtures) {
+  it.skip('LibreOffice oracle — run `python3 tools/oracle/generate.py` to build the fixtures', () => {});
+}
+
+describe.skipIf(!fixtures)('LibreOffice oracle', () => {
+  const { spec, expected, divergences } = fixtures ?? {
+    spec: { sheet: 'Oracle', suites: {} } as Spec,
+    expected: {} as Record<string, Expected[]>,
+    divergences: {} as Record<string, Divergence>,
+  };
 
   const outcomes: Outcome[] = [];
 
