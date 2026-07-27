@@ -1,8 +1,16 @@
 {
   "name": "@xlscalc/xlsx-preview",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Client-side, view-only .xlsx preview that computes formula values in the browser.",
-  "keywords": ["excel", "xlsx", "preview", "viewer", "spreadsheet", "react", "recalculate"],
+  "keywords": [
+    "excel",
+    "xlsx",
+    "preview",
+    "viewer",
+    "spreadsheet",
+    "react",
+    "recalculate"
+  ],
   "license": "MIT",
   "author": "Victor-EU",
   "repository": {
@@ -35,8 +43,15 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["dist", "src", "README.md", "LICENSE"],
-  "sideEffects": ["*.css"],
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": [
+    "*.css"
+  ],
   "engines": {
     "node": ">=18"
   },
@@ -49,7 +64,7 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "dependencies": {
-    "@xlscalc/formula-engine": "^0.3.0",
+    "@xlscalc/formula-engine": "^0.4.0",
     "exceljs": "^4.4.0",
     "fflate": "^0.8.2",
     "numfmt": "^3.2.6"

@@ -8,7 +8,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.4.0] — 2026-07-27
+
+A minor bump for a bug fix, because the rule in [VERSIONING.md](VERSIONING.md)
+is about what lands on someone's screen rather than about which file changed.
+No computed value moved; a host that renders audit findings will show far fewer
+of them.
 
 ### Fixed
 

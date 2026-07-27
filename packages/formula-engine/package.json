@@ -1,8 +1,16 @@
 {
   "name": "@xlscalc/formula-engine",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Zero-dependency Excel formula parser and evaluator. Fail-loud: never renders a guessed number.",
-  "keywords": ["excel", "xlsx", "formula", "spreadsheet", "parser", "evaluator", "calculation"],
+  "keywords": [
+    "excel",
+    "xlsx",
+    "formula",
+    "spreadsheet",
+    "parser",
+    "evaluator",
+    "calculation"
+  ],
   "license": "MIT",
   "author": "Victor-EU",
   "repository": {
@@ -22,7 +30,14 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["dist", "src", "!src/**/*.test.ts", "CAPABILITY.md", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "src",
+    "!src/**/*.test.ts",
+    "CAPABILITY.md",
+    "README.md",
+    "LICENSE"
+  ],
   "sideEffects": false,
   "engines": {
     "node": ">=18"
