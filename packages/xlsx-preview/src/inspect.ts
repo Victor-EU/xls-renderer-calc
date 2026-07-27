@@ -52,7 +52,7 @@ import {
   registeredFunctions,
   walk,
 } from '@xlscalc/formula-engine';
-import { readXlsx } from './ooxml.js';
+import { hasCachedValue, readXlsx } from './ooxml.js';
 
 export interface FunctionUse {
   name: string;
@@ -69,7 +69,11 @@ export interface Inspection {
   writer?: string;
   sheets: Array<{ name: string; cells: number; formulas: number; uncached: number }>;
   formulas: number;
-  /** Formula cells the file carries no value for — these render blank elsewhere. */
+  /**
+   * Formula cells the file carries no value for — these render blank elsewhere.
+   * Agrees exactly with `loadXlsx(...).model.facts.uncached`: both ask
+   * `hasCachedValue`, and a test holds them to the same answer.
+   */
   uncached: number;
   arrayFormulas: number;
   sharedFormulas: number;
@@ -125,7 +129,11 @@ export function inspectXlsx(buf: ArrayBuffer, opts: InspectOptions = {}): Inspec
       if (!cell.f) continue;
       sheetFormulas++;
       formulas++;
-      if (cell.v === undefined || cell.v === '') {
+      // The same judgement `bind` makes, from the same function. Testing `<v>`
+      // alone here counted every `IF(...,"",...)` that had legitimately computed
+      // to the empty string as never computed, so this reported more
+      // never-computed cells than the load it is meant to predict.
+      if (!hasCachedValue(cell)) {
         sheetUncached++;
         uncached++;
       }

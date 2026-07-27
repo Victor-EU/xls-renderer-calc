@@ -25,7 +25,13 @@ export {
   type RenderSource,
 } from './bind.js';
 export { findHardcoded, describeFinding, type HardcodedFinding } from './audit.js';
-export { readXlsx, type RawCell, type RawSheet, type RawWorkbook } from './ooxml.js';
+export {
+  hasCachedValue,
+  readXlsx,
+  type RawCell,
+  type RawSheet,
+  type RawWorkbook,
+} from './ooxml.js';
 export { parseXml, type XmlEvent } from './xml.js';
 
 export {

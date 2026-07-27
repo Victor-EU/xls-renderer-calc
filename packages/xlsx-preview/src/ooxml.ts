@@ -73,6 +73,31 @@ export interface RawWorkbook {
   iterative: boolean;
 }
 
+/**
+ * Did the file carry a value for this cell, or has it never been computed?
+ *
+ * This is the judgement the header's two-line example is about, and it exists as
+ * one exported function because it was being made in two places that disagreed.
+ * `bind` applied the `t="str"` refinement and `inspect` did not, so a workbook
+ * full of `IF(...,"",...)` — the commonest formula in a finished model — was
+ * reported as having more never-computed cells by the tool you run *before*
+ * loading than by the load itself. Two honest numbers for the same file, and the
+ * one that arrives first is the one a router acts on.
+ *
+ * The rule: an absent or empty `<v>` means never computed, *unless* `t="str"`,
+ * which says the formula ran and returned the empty string. Excel writes the
+ * type attribute whenever it writes a result, so the attribute's presence is the
+ * evidence of computation and the emptiness of `<v>` is only the result.
+ *
+ * Note this asks what the *file* holds, not what the cell is worth. A value
+ * written by a generator that never calculated is still a value here; how much
+ * to trust it is `RawWorkbook.writer`'s question, answered separately.
+ */
+export function hasCachedValue(cell: RawCell): boolean {
+  const empty = cell.v === undefined || cell.v === '';
+  return !empty || cell.t === 'str';
+}
+
 const decoder = new TextDecoder('utf-8');
 
 export function readXlsx(buf: ArrayBuffer | Uint8Array): RawWorkbook {

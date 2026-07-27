@@ -12,7 +12,7 @@ import { ERR, errorOf, Workbook, type Scalar } from '@xlscalc/formula-engine';
 import type { EvalReport, Provenance } from '@xlscalc/formula-engine';
 import { findHardcoded, type HardcodedFinding } from './audit.js';
 import type { SheetLayout } from './layout.js';
-import type { RawCell, RawWorkbook } from './ooxml.js';
+import { hasCachedValue, type RawCell, type RawWorkbook } from './ooxml.js';
 
 export interface OverlayCell {
   value: Scalar;
@@ -161,15 +161,15 @@ export function bind(raw: RawWorkbook, opts: BindOptions = {}): PreviewModel {
 
 /**
  * The cached value of a formula cell, or `undefined` when the file never had
- * one. This is the distinction the whole recalc story turns on, and it is
- * decidable from the raw `t` attribute — see the note at the top of ooxml.ts.
+ * one. This is the distinction the whole recalc story turns on.
+ *
+ * *Whether* there is one is `hasCachedValue`, which lives in ooxml.ts and is
+ * shared with `inspectXlsx` so the two cannot answer differently. This decodes
+ * it. `decodeValue` needs no special case for the empty-string result: its `str`
+ * branch already defaults an absent `<v>` to `''`.
  */
 function decodeCached(cell: RawCell, strings: string[]): Scalar | undefined {
-  const empty = cell.v === undefined || cell.v === '';
-  if (empty && cell.t === undefined) return undefined; // never computed
-  if (empty && cell.t === 'str') return ''; // computed to an empty string
-  if (empty && cell.t !== 'str') return undefined;
-  return decodeValue(cell, strings);
+  return hasCachedValue(cell) ? decodeValue(cell, strings) : undefined;
 }
 
 function decodeValue(cell: RawCell, strings: string[]): Scalar | undefined {

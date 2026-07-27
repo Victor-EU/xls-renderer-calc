@@ -21,7 +21,7 @@ generated financial model renders as a labelled skeleton. The previous fix was a
 server-side LibreOffice recalc, which costs the preview its two defining
 properties: no server, and nothing leaves the browser.
 
-**Status: built and verified.** 153 tests green; 399 oracle probes, a
+**Status: built and verified.** 161 tests green; 399 oracle probes, a
 **37,098-cell synthetic corpus of ten whole workbooks**, and a
 **202,795-cell corpus of ten *real* workbooks** — including a 138,421-formula
 business plan last saved by Excel itself — with **zero unexplained

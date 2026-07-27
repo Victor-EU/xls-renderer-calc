@@ -178,6 +178,7 @@ Other limits worth knowing before you adopt:
 | `isSafeHref` | whether a hyperlink target may be navigated to |
 | `findHardcoded` | literals whose neighbours' formulas contradict them |
 | `readXlsx` | the raw OOXML read, with no evaluation |
+| `hasCachedValue` | whether a raw cell carries a value, or has never been computed |
 | `/view` → `ExcelView`, `resolveContent`, `cellCss` | the React renderer |
 | `/worker` → `createPreviewWorker` | the off-thread path |
 
