@@ -4,6 +4,35 @@ Both packages are released together at the same version. See
 [VERSIONING.md](VERSIONING.md) — in particular, why adding a function is a
 breaking change to what appears on screen.
 
+## 0.3.0
+
+One question, asked in three places, answered differently in each.
+
+### Fixed
+
+- **`inspectXlsx(buf).uncached` counted more never-computed cells than the load
+  it exists to predict.** "Did the file already carry a value for this cell?" is
+  the question the whole recalc story turns on, and it is decidable only from the
+  raw `t` attribute: an empty `<v>` means never computed *unless* `t="str"`,
+  which says the formula ran and returned the empty string. `bind` applied that
+  refinement; `inspect` tested `<v>` alone. So every `IF(...,"",…)` — a formula
+  that appears in essentially every finished model — was reported as uncomputed
+  by the cheap pre-flight and as computed by the load.
+
+  Both numbers looked reasonable in isolation, which is what made this worth a
+  regression test rather than a one-line fix: nobody compares them by hand, and
+  the wrong one is the one that arrives first and decides how a file is routed.
+  The judgement is now `hasCachedValue` in `ooxml.ts` — one function, used by
+  both, with a test that holds them to the same answer on the same file.
+
+  The direction was safe: `inspect` only ever over-reported, so no file was
+  described as more computed than it was.
+
+### Added
+
+- **`hasCachedValue(cell)`** is exported, as the companion to `readXlsx` for
+  anyone reading raw cells themselves.
+
 ## 0.2.0
 
 The packaging release. `0.1.0` was never installable: both packages pointed

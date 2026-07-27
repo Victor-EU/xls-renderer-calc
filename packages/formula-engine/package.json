@@ -1,6 +1,6 @@
 {
   "name": "@xlscalc/formula-engine",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Zero-dependency Excel formula parser and evaluator. Fail-loud: never renders a guessed number.",
   "keywords": ["excel", "xlsx", "formula", "spreadsheet", "parser", "evaluator", "calculation"],
   "license": "MIT",
