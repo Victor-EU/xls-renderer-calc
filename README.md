@@ -382,6 +382,17 @@ Two shapes, and only one of them needs a value comparison:
   disagree with, so no value comparison can find it — it is visible only in the
   *shape* of the neighbourhood.
 
+  This one is a **heuristic, and you should treat its output as a place to look
+  rather than as a defect list.** It rests on reading a row or column as one
+  homogeneous block, and real models routinely break that: a prior-year column
+  beside this year's formulas, an opening balance in front of a projection, a
+  block of linked data stacked above a block of typed judgments. Findings are
+  now restricted to a genuine local band whose cells read the same kind of
+  inputs — on our ten-workbook real corpus that is about two findings per
+  workbook, down from more than ninety — but precision on a model we have not
+  seen is unmeasured. `findHardcoded` never affects a rendered value; it only
+  populates `PreviewModel.hardcoded`.
+
 The detector infers what the cell would have held by translating a neighbour's
 formula to its position and evaluating it, so the finding is specific rather than
 a vague suspicion. It requires at least two neighbours sharing one shape, because

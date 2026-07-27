@@ -8,6 +8,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **`findHardcoded` reported findings that were not there — 900+ on the real
+  corpus, of which essentially none were real.** "Neighbours" was never
+  implemented: *every* formula cell in the literal's row or column counted as a
+  candidate, so any shape shared by two of them was extrapolated over the whole
+  line. On `apps/demo/public/financial-model-nocache.xlsx` — a file in this
+  repository — that produced 33 findings and not one was correct. `B6`
+  (`=B4+B5`) and `B18` (`=B16+B17`) are twelve rows apart and share a shape, so
+  "each cell is the sum of the two above" was generalised down the column and
+  applied *upward* onto the model's hand-entered inputs, announcing that a date
+  serial in `B3` should have held `B1+B2` — which is 0, because `B1` and `B2`
+  are empty title cells.
+
+  A finding here names a cell and a number, so acting on a false one means
+  editing a model that was correct. Three rules now stand in the way. A shape
+  must be a **band**: its members occupy at least half their own span, nothing
+  foreign sits inside that span, and the literal is inside the band or
+  immediately *after* it — never immediately before, because the cell in front
+  of a run of formulas is where models seed a series (an opening balance, a
+  period-zero column) rather than where they get one wrong. And the literal must
+  be in the same **series**: a formula that would read raw inputs, sitting beside
+  formulas that read computed ones, is the first cell of another column of data,
+  not a missing copy of its neighbours. That last rule also kills reconstructions
+  whose inputs do not exist, which is how `=B1+B2` over two empty cells became a
+  disagreement in the first place.
+
+  On the ten-workbook real corpus: **900+ before (capped at 200 on four of the
+  ten files), 23 after** — about two per workbook, with the right shape at last
+  (a total that misses its own column sum by 167k; a stated `6731.67` where the
+  formula gives `6731.69`; round `-20000` plugs where an average computes
+  `-16849`).
+
+  **This is not a precision guarantee.** Nobody has ground truth for those 23,
+  and a separate corpus of machine-generated models measured every finding as
+  false — generated models routinely stack a linked-data block above a
+  typed-judgment block in one column, and treating a column as homogeneous is the
+  assumption this whole detector rests on. Treat the output as a place to look,
+  not as a defect list. The detector also had **no test at all**, which is how it
+  shipped at that precision; it now has fourteen, including both demo workbooks.
+
+  Values are unaffected — nothing about evaluation changed. What changes is which
+  cells `PreviewModel.hardcoded` reports, so a host that renders those findings
+  will show far fewer of them.
+
 ## [0.3.0] — 2026-07-27
 
 ### Added
