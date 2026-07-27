@@ -32,7 +32,7 @@
   },
   "scripts": {
     "prepack": "npm run build",
-    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').copyFileSync('../../CAPABILITY.md','CAPABILITY.md')\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json && node -e \"require('node:fs').copyFileSync('../../CAPABILITY.md','CAPABILITY.md')\"",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   }
 }

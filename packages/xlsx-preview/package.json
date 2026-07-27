@@ -45,7 +45,7 @@
   },
   "scripts": {
     "prepack": "npm run build",
-    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').copyFileSync('src/view/style.css','dist/view/style.css')\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json && node -e \"require('node:fs').copyFileSync('src/view/style.css','dist/view/style.css')\"",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "dependencies": {
